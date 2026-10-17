@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>pixeldeck — sprite sheet</title>
+<style>
+  body { background: #1a1c2c; color: #94b0c2; font: 13px/1.4 ui-monospace, Menlo, monospace; margin: 16px; }
+  h2 { font-size: 13px; margin: 14px 0 6px; color: #f4f4f4; }
+  canvas { image-rendering: pixelated; display: inline-block; margin-right: 8px; background: #1a1c2c; outline: 1px solid #333c57; }
+</style>
+</head>
+<body>
+<div id="out"></div>
+<script src="../palette.js"></script>
+<script src="../engine/tween.js"></script>
+<script src="../engine/sprites.js"></script>
+<script>
+  var Z = +(new URLSearchParams(location.search).get('zoom') || 8);
+  var out = document.getElementById('out');
+  for (var name in Sprites.defs) {
+    var def = Sprites.defs[name];
+    for (var an in def.anims) {
+      var A = def.anims[an];
+      var h = document.createElement('h2');
+      h.textContent = name + ' · ' + an + ' (' + A.cells.length + ' frames @ ' + A.fps + 'fps)';
+      out.appendChild(h);
+      var live = document.createElement('canvas');
+      live.width = def.w; live.height = def.h;
+      live.style.width = def.w * Z + 'px'; live.style.height = def.h * Z + 'px';
+      live.dataset.anim = an; live.dataset.sprite = name; live.className = 'live';
+      out.appendChild(live);
+      A.cells.forEach(function (cells) {
+        var c = document.createElement('canvas');
+        c.width = def.w; c.height = def.h;
+        c.style.width = def.w * Z + 'px'; c.style.height = def.h * Z + 'px';
+        var ctx = c.getContext('2d');
+        cells.forEach(function (p) { ctx.fillStyle = PALETTE.hex[p.c]; ctx.fillRect(p.x, p.y, 1, 1); });
+        out.appendChild(c);
+      });
+    }
+  }
+  var t0 = performance.now();
+  (function loop(now) {
+    var t = Math.max(0, now - t0) / 1000;
+    document.querySelectorAll('canvas.live').forEach(function (c) {
+      var A = Sprites.defs[c.dataset.sprite].anims[c.dataset.anim];
+      var f = Math.floor(t * A.fps) % A.cells.length;
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = PALETTE.hex[0]; ctx.fillRect(0, 0, c.width, c.height);
+      A.cells[f].forEach(function (p) { ctx.fillStyle = PALETTE.hex[p.c]; ctx.fillRect(p.x, p.y, 1, 1); });
+    });
+    requestAnimationFrame(loop);
+  })(t0);
+</script>
+</body>
+</html>

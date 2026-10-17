@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Pixeldeck Studio</title>
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<div id="studio"></div>
+<noscript>Pixeldeck Studio needs JavaScript, and nothing else: no network, no install.</noscript>
+
+<!-- the engine: its loader pulls in every engine module, in order -->
+<script src="../engine/pixeldeck.js"></script>
+<!-- the looks, and the two sample decks (One Giant Leap is read-only, its template replica is the editable copy) -->
+<script src="../themes/cosmos/theme.js"></script>
+<script src="../themes/slate/theme.js"></script>
+<script src="../decks/one-giant-leap/theme.js"></script>
+<script src="../decks/one-giant-leap/assets.js"></script>
+<script src="../decks/one-giant-leap/deck.js"></script>
+<script src="../decks/_parity/assets.js"></script>
+<script src="../decks/_parity/deck.js"></script>
+<!-- the Studio: the shell and its store, then the screens, then the storyboard workspace -->
+<script src="persist.js"></script>
+<script src="import.js"></script>
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script src="screens/welcome.js"></script>
+<script src="screens/brief.js"></script>
+<script src="screens/shape.js"></script>
+<script src="screens/look.js"></script>
+<script src="screens/export.js"></script>
+<script src="ui/forms.js"></script>
+<script src="ui/preview.js"></script>
+<script src="ui/filmstrip.js"></script>
+<script src="ui/arc.js"></script>
+<script src="ui/director.js"></script>
+<script src="ui/assets-panel.js"></script>
+<script src="ui/picker.js"></script>
+<script src="ui/inspector.js"></script>
+<script src="screens/board.js"></script>
+<script src="screens/rehearse.js"></script>
+<script>
+  (function () {      // start the Studio, or say plainly what is missing (a moved folder is the usual cause)
+    var ok = window.PD && PD.missing && PD.has;
+    var missing = ok ? PD.missing().concat(['studio/persist', 'studio/import', 'studio/store', 'studio/app'].filter(function (n) { return !PD.has(n); })) : ['engine/pixeldeck.js'];
+    if (missing.length) { if (ok && PD.fail) PD.fail('pixeldeck studio: missing files: ' + missing.join(', ') + '\nKeep the studio folder next to engine/, themes/ and decks/.'); else document.body.textContent = 'pixeldeck studio: engine/pixeldeck.js did not load. Keep the studio folder next to engine/, themes/ and decks/.'; }
+    else PD.studio.start();
+  })();
+</script>
+</body>
+</html>

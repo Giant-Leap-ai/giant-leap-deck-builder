@@ -1,0 +1,19 @@
+{
+  "name": "pixeldeck-tools",
+  "private": true,
+  "description": "Dev-only tooling for pixeldeck: recorder, regression gate, test runners, lint, export. The decks themselves need none of this.",
+  "scripts": {
+    "record": "node record.js",
+    "test": "node test/run.js",
+    "e2e": "node test/e2e.js",
+    "golden": "node regression/golden.js",
+    "compare": "node regression/compare.js",
+    "perf": "node regression/perf.js",
+    "stall": "node regression/stall.js",
+    "lint": "node lint.js",
+    "export": "node export.js"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

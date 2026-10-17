@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pixeldeck — presenter</title>
+<style>
+  :root { --bg: #1a1c2c; --panel: #232539; --line: #333c57; --text: #f4f4f4; --muted: #94b0c2; --accent: #ef7d57; --ok: #a7f070; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+  header { display: flex; align-items: center; gap: 24px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  #pos { font: 700 28px/1 ui-monospace, Menlo, monospace; }
+  #pos small { font-size: 16px; color: var(--muted); margin-left: 8px; }
+  #timer { font: 700 40px/1 ui-monospace, Menlo, monospace; color: var(--ok); cursor: pointer; margin-left: auto; }
+  #clock { font: 500 18px ui-monospace, Menlo, monospace; color: var(--muted); }
+  #link { font: 600 12px ui-monospace, Menlo, monospace; padding: 4px 8px; border-radius: 4px; background: #5d275d; }
+  #link.on { background: #257179; }
+  #blk { font: 700 12px ui-monospace, Menlo, monospace; padding: 4px 8px; border-radius: 4px; background: #000; color: #fff; display: none; }
+  main { overflow: hidden; display: grid; grid-template-columns: 1.15fr 1fr; gap: 20px; padding: 20px; min-height: 0; }
+  #notes { font-size: 26px; line-height: 1.4; white-space: pre-wrap; overflow: auto; padding-right: 8px; }
+  .side { display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: hidden; }
+  .thumb { background: #000; border: 1px solid var(--line); }
+  .thumb canvas { display: block; width: 100%; aspect-ratio: 16 / 9; image-rendering: pixelated; }
+  .label { font: 600 12px ui-monospace, Menlo, monospace; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+  #nextNotes { color: var(--muted); font-size: 15px; white-space: pre-wrap; max-height: 5.5em; overflow: hidden; }
+  footer { display: flex; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; align-items: center; }
+  button { font: 600 14px ui-monospace, Menlo, monospace; background: var(--panel); color: var(--text);
+           border: 1px solid var(--line); padding: 8px 14px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  footer .keys { margin-left: auto; text-align: right; }
+  @media (max-width: 1100px) { footer .keys { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div id="pos">–<small></small></div>
+  <span id="link">WAITING FOR STAGE</span>
+  <span id="blk">BLACKOUT</span>
+  <span id="clock"></span>
+  <div id="timer" title="Click to reset">00:00</div>
+</header>
+<main>
+  <div>
+    <div class="label">Notes</div>
+    <div id="notes">Open index.html (or press N on the stage) — this window follows along.</div>
+  </div>
+  <div class="side">
+    <div>
+      <div class="label">Next</div>
+      <div class="thumb"><canvas id="next"></canvas></div>
+      <div id="nextNotes"></div>
+    </div>
+    <div>
+      <div class="label">Now</div>
+      <div class="thumb" style="max-width: 55%"><canvas id="now"></canvas></div>
+    </div>
+  </div>
+</main>
+<footer>
+  <button id="bPrev">◀ PREV</button>
+  <button id="bNext">NEXT ▶</button>
+  <button id="bBlack">BLACKOUT</button>
+  <button id="bReplay">REPLAY</button>
+  <button id="bReset">RESET TIMER</button>
+  <span class="keys">Keys here also drive the stage: → / ← / Space / PageUp / PageDown · B · R</span>
+</footer>
+
+<script src="palette.js"></script>
+<script src="engine/tween.js"></script>
+<script src="engine/font.js"></script>
+<script src="engine/sprites.js"></script>
+<script src="engine/particles.js"></script>
+<script src="engine/deck.js"></script>
+<script src="slides.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var state = null, linked = false, lastSeen = 0;
+  var t0 = null;
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    var h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = s % 60;
+    return (h ? h + ':' : '') + (m < 10 ? '0' : '') + m + ':' + (ss < 10 ? '0' : '') + ss;
+  }
+
+  function nextOf(s) {
+    if (s.step < PixelDeck.stepsOf(s.slide)) return { slide: s.slide, step: s.step + 1 };
+    if (s.slide < DECK.length - 1) return { slide: s.slide + 1, step: 0 };
+    return null;
+  }
+
+  function render() {
+    if (!state) return;
+    var s = state;
+    $('pos').firstChild.nodeValue = (s.slide + 1) + ' / ' + DECK.length;
+    $('pos').querySelector('small').textContent =
+      (s.steps ? 'step ' + s.step + '/' + s.steps + ' · ' : '') + (s.id || '');
+    $('notes').textContent = PixelDeck.notesFor(s.slide, s.step) || '(no notes)';
+    PixelDeck.renderThumb($('now'), s.slide, s.step);
+    var n = nextOf(s);
+    if (n) {
+      PixelDeck.renderThumb($('next'), n.slide, n.step);
+      var ns = DECK[n.slide];
+      $('nextNotes').textContent = (n.step ? 'Step ' + n.step + ' of ' : '') + (n.slide + 1) + ' · ' + (ns.id || '') +
+        (n.step && ns.steps[n.step - 1].notes ? ' — ' + ns.steps[n.step - 1].notes : ns.notes ? ' — ' + ns.notes : '');
+    } else {
+      var c = $('next'), ctx = c.getContext('2d');
+      c.width = 320; c.height = 180; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 320, 180);
+      $('nextNotes').textContent = 'End of deck.';
+    }
+    $('blk').style.display = s.blackout ? 'inline-block' : 'none';
+  }
+
+  Sync.on(function (msg) {
+    if (msg.type !== 'state') return;
+    state = msg; lastSeen = Date.now();
+    if (t0 === null && (msg.slide > 0 || msg.step > 0)) t0 = Date.now(); // start on first advance
+    render();
+  });
+
+  function cmd(c, extra) {
+    var m = { type: 'cmd', cmd: c };
+    if (extra) for (var k in extra) m[k] = extra[k];
+    Sync.send(m);
+  }
+  $('bNext').onclick = function () { cmd('next'); };
+  $('bPrev').onclick = function () { cmd('prev'); };
+  $('bBlack').onclick = function () { cmd('blackout'); };
+  $('bReplay').onclick = function () { cmd('replay'); };
+  $('bReset').onclick = $('timer').onclick = function () { t0 = Date.now(); };
+
+  window.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') { e.preventDefault(); if (!e.repeat) cmd('next'); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); if (!e.repeat) cmd('prev'); }
+    else if (k === 'b' || k === 'B' || k === '.') cmd('blackout');
+    else if (k === 'r' || k === 'R') cmd('replay');
+  });
+
+  setInterval(function () {
+    $('timer').textContent = fmt(t0 === null ? 0 : (Date.now() - t0) / 1000);
+    var d = new Date();
+    $('clock').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Ask for state until the stage answers (works whichever window opened first).
+    if (!state || Date.now() - lastSeen > 3000) Sync.send({ type: 'hello' });
+    linked = state && Date.now() - lastSeen < 6000;
+    $('link').textContent = linked ? 'LINKED TO STAGE' : 'WAITING FOR STAGE';
+    $('link').className = linked ? 'on' : '';
+  }, 500);
+  Sync.send({ type: 'hello' });
+})();
+</script>
+</body>
+</html>

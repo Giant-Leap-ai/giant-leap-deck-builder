@@ -1,0 +1,19 @@
+# dependencies (run: cd tools && npm install)
+tools/node_modules/
+
+# videos and recordings: host these elsewhere and link them
+*.mp4
+*.webm
+
+# regression screenshots (~330 MB); regenerate with: cd tools && npm run golden
+tools/regression/baselines/
+tools/regression/baseline-one-giant-leap/
+tools/regression/out/
+
+# generated
+tools/test/.harness.html
+decks/*/export/
+!decks/one-giant-leap/export/
+
+# OS junk
+.DS_Store

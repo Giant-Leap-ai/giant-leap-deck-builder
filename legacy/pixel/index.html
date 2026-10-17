@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pixeldeck</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; cursor: none; }
+  .hud { position: fixed; font: 600 13px/1.2 ui-monospace, Menlo, Consolas, monospace; color: #94b0c2;
+         background: rgba(26, 28, 44, .85); padding: 6px 10px; border: 1px solid #333c57; pointer-events: none; }
+  #fps { top: 8px; left: 8px; display: none; color: #a7f070; }
+  #goto { bottom: 12px; left: 50%; transform: translateX(-50%); opacity: 0; transition: opacity .15s; color: #ffcd75; font-size: 16px; }
+  #toast { top: 8px; right: 8px; opacity: 0; transition: opacity .2s; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="fps" class="hud"></div>
+<div id="goto" class="hud"></div>
+<div id="toast" class="hud"></div>
+
+<script src="palette.js"></script>
+<script src="engine/tween.js"></script>
+<script src="engine/font.js"></script>
+<script src="engine/sprites.js"></script>
+<script src="engine/particles.js"></script>
+<script src="engine/deck.js"></script>
+<script src="slides.js"></script>
+<script>
+  window.addEventListener('mousemove', function () {
+    var c = document.getElementById('stage');
+    c.style.cursor = 'default';
+    clearTimeout(window.__cur);
+    window.__cur = setTimeout(function () { c.style.cursor = 'none'; }, 1500);
+  });
+  PixelDeck.boot(document.getElementById('stage'));
+</script>
+</body>
+</html>

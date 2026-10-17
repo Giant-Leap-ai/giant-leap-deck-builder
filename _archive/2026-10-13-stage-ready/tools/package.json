@@ -1,0 +1,11 @@
+{
+  "name": "pixeldeck-tools",
+  "private": true,
+  "description": "Dev-only tooling for pixeldeck (video backup recorder). The deck itself needs none of this.",
+  "scripts": {
+    "record": "node record.js"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WP7 board harness</title></head><body>
+<!-- Test harness for the storyboard and Rehearse screens: the real engine and the real WP7 modules, with the WP6 shell and
+     store replaced by tools/test/fixtures/wp7-studio-stub.js. Query: ?kind=replica|ogl|story|empty &screen=board|rehearse
+     &assets=1 &theme=cosmos|slate &answers=all|some|none &targetMin=N. Nothing here is shipped. -->
+<script src="../../../engine/pixeldeck.js"></script>
+<script src="../../../themes/cosmos/theme.js"></script>
+<script src="../../../themes/slate/theme.js"></script>
+<script src="../../../decks/one-giant-leap/theme.js"></script>
+<script src="../../../decks/one-giant-leap/assets.js"></script>
+<script src="../../../decks/one-giant-leap/deck.js"></script>
+<script src="../../../decks/_parity/assets.js"></script>
+<script src="../../../decks/_parity/deck.js"></script>
+<script src="../../../studio/ui/forms.js"></script>
+<script src="../../../studio/ui/preview.js"></script>
+<script src="../../../studio/ui/arc.js"></script>
+<script src="../../../studio/ui/director.js"></script>
+<script src="../../../studio/ui/assets-panel.js"></script>
+<script src="../../../studio/ui/picker.js"></script>
+<script src="../../../studio/ui/filmstrip.js"></script>
+<script src="../../../studio/ui/inspector.js"></script>
+<script src="../../../studio/screens/board.js"></script>
+<script src="../../../studio/screens/rehearse.js"></script>
+<script src="wp7-studio-stub.js"></script>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search), o = {};
+    o.screen = q.get('screen') || 'board';
+    if (q.get('theme')) o.theme = q.get('theme');
+    if (q.get('answers')) o.answers = q.get('answers');
+    if (q.get('targetMin') != null) o.targetMin = q.get('targetMin') === 'null' ? null : +q.get('targetMin');
+    o.assets = q.get('assets') === '1';
+    window.__ready = Promise.resolve(Studio.stub.boot(q.get('kind') || 'replica', o));
+  })();
+</script>
+</body></html>
