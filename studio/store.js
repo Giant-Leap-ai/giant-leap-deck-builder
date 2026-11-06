@@ -2,10 +2,12 @@
  *
  * PD.studio.store (= Studio.store) is the contract WP7 builds the storyboard on. Exactly as §7.8:
  *   get() → Project                         treat as immutable; every commit and every selection makes a NEW object
- *   commit(label, mutate(draft)) → bool     deep-clones the project, runs mutate on the clone, pushes one undo entry (up to
- *                                           100), schedules the autosave (1 s) and emits 'change'. Commits with the same
+ *   commit(label, mutate(draft), opts?) → bool   deep-clones the project, runs mutate on the clone, pushes one undo entry (up
+ *                                           to 100), schedules the autosave (1 s) and emits 'change'. Commits with the same
  *                                           label less than 1 s apart share one undo entry, so typing in one field is one
- *                                           step; a mutate that changes nothing is dropped. false when the deck is read-only.
+ *                                           step; one that adds, removes or reorders scenes never shares, and nor does one
+ *                                           with opts.merge === false (a discrete action: a rename, a click, a dropped file).
+ *                                           A mutate that changes nothing is dropped. false when the deck is read-only.
  *   undo() redo() canUndo() canRedo()
  *   select(sceneId | null, step = 0), selection() → { sceneId, step }
  *   compiled() → CompiledDeck               cached; after a commit only the scenes that changed are expanded again
@@ -350,7 +352,10 @@ function (PD, persist, files, themeMod, compileMod, validateMod, copy, fws, inte
     scheduleLint();
   }
 
-  function commit(label, mutate) {
+  // opts.merge === false: a discrete action (a rename, a click on a swatch, a dropped file) is always its own undo step, even
+  // when the same action was taken a moment ago. Typing keeps the default: the same label within 1 s is one step. A commit
+  // that adds, removes or reorders scenes is never merged.
+  function commit(label, mutate, opts) {
     if (!proj || proj.studio.readOnly || typeof mutate !== 'function') return false;
     var before = proj, beforeKey = curKey || (curKey = keyOf(before)), draft = clone(before);
     mutate(draft);
@@ -362,15 +367,15 @@ function (PD, persist, files, themeMod, compileMod, validateMod, copy, fws, inte
       proj = draft; emit('studio', draft.studio); scheduleAutosave();
       return true;
     }
-    var now = Date.now();
-    var merge = !!label && label === lastCommit.label && now - lastCommit.at < COALESCE_MS && undoStack.length > 0;
-    if (!merge) { undoStack.push(before); if (undoStack.length > UNDO_MAX) undoStack.shift(); }
-    lastCommit = { label: label, at: now };
-    redoStack = [];
+    var now = Date.now(), alone = !!(opts && opts.merge === false);
     draft.deck.format = 2;
     draft.deck.meta.updated = new Date(now).toISOString();
     draft.deck.meta.generator = GENERATOR;
     var ev = diff(before, draft);
+    var merge = !alone && !ev.structural && !!label && label === lastCommit.label && now - lastCommit.at < COALESCE_MS && undoStack.length > 0;
+    if (!merge) { undoStack.push(before); if (undoStack.length > UNDO_MAX) undoStack.shift(); }
+    lastCommit = alone || ev.structural ? { label: null, at: 0 } : { label: label, at: now };
+    redoStack = [];
     var removed = before.deck.scenes.findIndex(function (s) { return !draft.deck.scenes.some(function (t) { return t.id === s.id; }); });
     if (removed >= 0) ev.removedAt = removed;
     proj = draft;
@@ -454,15 +459,15 @@ function (PD, persist, files, themeMod, compileMod, validateMod, copy, fws, inte
   function totalBytes() { var t = 0, a = assets(); for (var k in a) if (has(a, k)) t += a[k].bytes || 0; return t; }
   function mb(n) { return (n / 1048576).toFixed(n >= 10485760 ? 0 : 1); }
   function addFiles(list) {
-    var arr = Array.prototype.slice.call(list || []), result = { added: [], rejected: [], warnings: [] };
+    var arr = Array.prototype.slice.call(list || []), result = { added: [], existing: [], rejected: [], warnings: [] };
     var refuse = function (msg) { result.rejected = arr.map(function (f) { return { name: f.name, msg: msg, message: msg }; }); return Promise.resolve(result); };
     if (!proj) return refuse('Open or start a deck first.');
     if (proj.studio.readOnly) return refuse('This deck is read-only.');
     var deckId = proj.deck.id;
     return files.addFiles(arr, { deckId: deckId }).then(function (res) {
-      result.rejected = res.rejected; result.warnings = res.warnings.slice(); result.added = res.added;
+      result.rejected = res.rejected; result.warnings = res.warnings.slice(); result.added = res.added; result.existing = res.existing || [];
       if (res.added.length) {
-        commit('Add ' + (res.added.length === 1 ? res.added[0].id : res.added.length + ' files'), function (d) { res.added.forEach(function (a) { d.assets[a.id] = a.hash; }); });
+        commit('Add ' + (res.added.length === 1 ? res.added[0].id : res.added.length + ' files'), function (d) { res.added.forEach(function (a) { d.assets[a.id] = a.hash; }); }, { merge: false });
         res.added.forEach(function (a) {
           var rec = assetRecs[a.hash];
           if (rec && rec.type === 'image' && rec.bytes > files.BIG_IMAGE) result.warnings.push({ kind: 'big-image', id: a.id, msg: a.id + ' is ' + mb(rec.bytes) + ' MB even after shrinking. Big pictures can slow the deck down.' });
@@ -484,7 +489,7 @@ function (PD, persist, files, themeMod, compileMod, validateMod, copy, fws, inte
       delete d.assets[id];
       var p = d.deck.meta.themePatch;
       if (p && Array.isArray(p.fontFaces) && p.fontFaces.some(function (f) { return f.asset === id; })) clearFontPatch(d.deck.meta);
-    });
+    }, { merge: false });
     if (ok) { PD.assets.remove(proj.deck.id, id); emit('assets', { removed: id }); }
     return ok;
   }
@@ -513,7 +518,7 @@ function (PD, persist, files, themeMod, compileMod, validateMod, copy, fws, inte
   }
   function setBrandFont(assetId, family) {
     if (!proj || proj.studio.readOnly) return Promise.resolve(false);
-    if (!assetId) { commit('Brand font', function (d) { clearFontPatch(d.deck.meta); }); return Promise.resolve(true); }
+    if (!assetId) { commit('Brand font', function (d) { clearFontPatch(d.deck.meta); }, { merge: false }); return Promise.resolve(true); }
     var src = PD.assets.get(proj.deck.id)[assetId];
     if (!src || src.type !== 'font') return Promise.resolve(false);
     var fam = String(family || src.family || assetId).replace(/["\\]/g, '').trim() || 'Brand font';
@@ -527,7 +532,7 @@ function (PD, persist, files, themeMod, compileMod, validateMod, copy, fws, inte
         m.themePatch.fontFaces = [{ family: fam, asset: assetId }];
         m.themePatch.fonts = m.themePatch.fonts || {};
         m.themePatch.fonts.display = '"' + fam + '", ' + baseDisplayFont(m.theme);
-      });
+      }, { merge: false });
       return true;
     });
   }

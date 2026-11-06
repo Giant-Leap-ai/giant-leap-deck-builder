@@ -55,6 +55,8 @@ PD.module('studio/ui/director', [], function (PD) {
     '.dr-clean .pdx-ico { color: var(--pdx-ok); }'
   ].join('\n');
 
+  var FIT = { 'copy.lines': 1, 'build.text.overflow': 1, 'build.template.prop-max': 1 };      // something on a slide too long or out of range
+
   function create(opts) {
     opts = opts || {};
     var f = F(), h = f.h, icon = f.icon;
@@ -153,18 +155,24 @@ PD.module('studio/ui/director', [], function (PD) {
       var sc = Math.max(0, Math.min(100, L.score == null ? 100 : L.score));
       score.textContent = String(Math.round(sc));
       ringFg.setAttribute('stroke-dashoffset', String(175.9 * (1 - sc / 100)));
-      ring.style.setProperty('--c', sc >= 90 ? 'var(--pdx-ok)' : sc >= 70 ? 'var(--pdx-warn)' : 'var(--pdx-err)');
       var counts = L.counts || { error: 0, warn: 0, info: 0 };
       var errList = (L.findings || []).filter(function (x) { return x.sev === 'error'; }), errs = errList.length;
       // a deck whose only errors are placeholders is a draft, not a failure: say so in a gentler colour
       var draft = !L.ready && errs > 0 && errList.every(function (x) { return x.id === 'copy.placeholder'; });
-      pill.className = 'pdx-pill ' + (L.ready ? 'is-ok' : draft ? 'is-warn' : 'is-err');
+      // the ring and the pill tell one story. Errors decide whether it is ready; the score counts everything else. So a ready
+      // deck is never red (amber while the score is low, or while something on a slide does not fit its space: that is only a
+      // warning, but it is the one the room sees), and a deck with errors is never green.
+      var fit = (L.findings || []).filter(function (x) { return FIT[x.id]; }).length, warns = counts.warn || 0;
+      var caution = L.ready && (fit > 0 || sc < 70);
+      ring.style.setProperty('--c', L.ready ? (sc >= 90 && !fit ? 'var(--pdx-ok)' : 'var(--pdx-warn)') : draft ? 'var(--pdx-warn)' : 'var(--pdx-err)');
+      pill.className = 'pdx-pill ' + (L.ready ? (caution ? 'is-warn' : 'is-ok') : draft ? 'is-warn' : 'is-err');
       f.clear(pill);
-      pill.appendChild(icon(L.ready ? 'check' : draft ? 'pen' : 'alert', 13));
-      pill.appendChild(document.createTextNode(L.ready ? S.say('lint.ready') : draft ? 'Still drafting' : (errs + (errs === 1 ? ' thing' : ' things') + ' to fix')));
-      sum.textContent = L.ready ? (L.summary || '') : draft ? (errs === 1 ? 'One scene still has placeholder text. Write it and this clears.' : errs + ' scenes still have placeholder text. Write them and this clears.')
+      pill.appendChild(icon(L.ready ? (caution ? 'alert' : 'check') : draft ? 'pen' : 'alert', 13));
+      pill.appendChild(document.createTextNode(L.ready ? (fit ? (fit === 1 ? '1 thing doesn\u2019t fit' : fit + ' things don\u2019t fit') : S.say('lint.ready')) : draft ? 'Still drafting' : (errs + (errs === 1 ? ' thing' : ' things') + ' to fix')));
+      sum.textContent = L.ready ? (fit ? 'Nothing stops you presenting, but something on a slide is longer than its space allows. Fix that first.'
+          : sc < 70 ? 'Nothing stops you presenting. ' + (warns === 1 ? 'One thing is' : warns + ' things are') + ' worth a look, and each one you settle raises the score.' : (L.summary || ''))
+        : draft ? (errs === 1 ? 'One scene still has placeholder text. Write it and this clears.' : errs + ' scenes still have placeholder text. Write them and this clears.')
         : errs === 1 ? 'One thing to fix before it\u2019s stage-ready. You can still present.' : (S.say ? S.say('lint.notReady', { e: errs }) : '');
-      if (draft) ring.style.setProperty('--c', 'var(--pdx-warn)');
       var all = L.findings || [], items = mode === 'scene' ? all.filter(function (x) { return x.sceneId === d.selectedId; }) : all;
       // nothing the panel shows has changed: leave the DOM alone (a press in flight on Show me must not lose its button)
       var sig = JSON.stringify([L.score, L.ready, L.summary, JSON.stringify(openGroups), items.map(function (x) { return [x.id, x.sceneId, x.step, x.sev, x.msg, x.fix]; }), all.length, d.selectedId, mode, fold.info, !!d.readOnly,

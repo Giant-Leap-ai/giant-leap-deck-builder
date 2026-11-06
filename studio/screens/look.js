@@ -29,6 +29,7 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
   }
   function toHex(c) { return '#' + c.map(function (v) { return ('0' + Math.max(0, Math.min(255, Math.round(v))).toString(16)).slice(-2); }).join(''); }
   function mix(a, b, t) { var x = rgb(a), y = rgb(b); return toHex([0, 1, 2].map(function (i) { return x[i] + (y[i] - x[i]) * t; })); }
+  var ONE = { merge: false };                       // store.commit option: a click is an undo step of its own
   var PRESETS = ['#ffd27a', '#ff9a3d', '#ff6b9a', '#b08cff', '#5ef1ff', '#6fe0a0'];
   function glowOf(hex) { return mix(hex, '#ff6a00', 0.4); }
   function normHex(v) { var c = rgb(v); return c ? toHex(c) : null; }
@@ -133,6 +134,24 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
       /* ------------------------------------------------ theme cards */
       var cardRow = h('div', { class: 'pds-look-cards', role: 'radiogroup', 'aria-label': 'Look' });
       page.appendChild(cardRow);
+      // a brand longer than the brand reveal's title is made for is shortened in the preview (not in the deck): say so, and where to fix it
+      var nameNote = h('div', { class: 'pds-look-note', role: 'status', hidden: true });
+      page.appendChild(nameNote);
+      function paintNameNote() {
+        var T = PD.template.get('brand-reveal'), room = T && T.props && T.props.title && T.props.title.max || 18;
+        var brand = String((meta().story || {}).brand || '').trim();
+        nameNote.textContent = '';
+        nameNote.hidden = brand.length <= room;
+        if (nameNote.hidden) return;
+        nameNote.appendChild(icon('warn', 16));
+        nameNote.appendChild(h('div', null, [
+          h('span', null, ['Your name has ' + brand.length + ' characters. The brand reveal and the closing slide are made for ' + room + ' or fewer, so the preview shortens it. A short form reads best on those slides.']),
+          h('button', { class: 'pds-link', type: 'button', 'data-act': 'edit-brand', onclick: function () {
+            var at = PD.story.interview.questions.findIndex(function (q) { return q.id === 'brand'; });
+            if (at >= 0) store.patchStudio({ briefAt: at });
+            ctx.nav('brief');
+          } }, ['Use a short form on the Brief'])]));
+      }
       function suggested() { var t = (meta().story || {}).tone; return t ? PD.story.defaultTheme(t) : null; }
       THEMES.forEach(function (t, i) {
         var canvas = h('canvas', { class: 'pds-look-canvas', 'aria-hidden': 'true' });
@@ -196,7 +215,7 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
         var m = meta();
         if (id === m.theme || ro()) { paintCards(); return; }
         var problems = needing(store.get().deck.scenes, id, m), label = THEMES.filter(function (t) { return t.id === id; })[0].name;
-        if (!problems.length) { store.commit('Look: ' + label, function (d) { applyTheme(d, id); }); return; }
+        if (!problems.length) { store.commit('Look: ' + label, function (d) { applyTheme(d, id); }, ONE); return; }
         var list = h('ul', { class: 'pds-swap-list' }, problems.map(function (pr) {
           var to = swapFor(pr.scene), T2 = PD.template.get(to.template);
           return h('li', null, [h('b', null, [String(pr.index + 1).padStart(2, '0')]), h('span', null, [pr.template.label]), icon('arrow', 14), h('span', null, [T2 ? T2.label : to.template])]);
@@ -216,7 +235,7 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
               var at = d.deck.scenes.findIndex(function (s) { return s.id === pr.scene.id; });
               if (at >= 0) d.deck.scenes[at] = swapFor(d.deck.scenes[at]);
             });
-          });
+          }, ONE);
           if (choice === 'swap') ui.toast('Swapped ' + problems.length + (problems.length === 1 ? ' scene' : ' scenes') + '. Undo brings them back.');
         });
       }
@@ -234,21 +253,22 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
         var color = h('input', { class: 'pds-color', type: 'color', 'data-ctl': opts.key, 'aria-label': opts.label, disabled: ro() ? true : null });
         var hex = h('input', { class: 'pds-input pds-hex', type: 'text', maxlength: '7', spellcheck: 'false', 'aria-label': opts.label + ' as a hex code', disabled: ro() ? true : null });
         var reset = h('button', { class: 'pds-icon-btn', type: 'button', title: 'Reset ' + opts.label.toLowerCase() + ' to the look\'s own', 'aria-label': 'Reset ' + opts.label.toLowerCase(), 'data-act': 'reset-' + opts.key, disabled: ro() ? true : null, onclick: function () {
-          store.commit('Look: ' + opts.label, function (d) { opts.clear(d.deck.meta.themePatch && d.deck.meta.themePatch.roles); store.cleanPatch(d.deck.meta); });
+          store.commit('Look: ' + opts.label, function (d) { opts.clear(d.deck.meta.themePatch && d.deck.meta.themePatch.roles); store.cleanPatch(d.deck.meta); }, ONE);
         } }, [icon('refresh', 16)]);
-        function apply(v) { var c = normHex(v); if (!c) return; later(opts.key, function () { store.commit('Look: ' + opts.label, function (d) { opts.write(patchRoles(d), c); }); }); }
+        // dragging the colour picker or typing a hex code is one undo step; a click on a preset is a step of its own
+        function apply(v, once) { var c = normHex(v); if (!c) return; later(opts.key, function () { store.commit('Look: ' + opts.label, function (d) { opts.write(patchRoles(d), c); }, once ? ONE : null); }); }
         color.addEventListener('input', function () { hex.value = color.value; apply(color.value); });
         hex.addEventListener('input', function () { var c = normHex(hex.value.indexOf('#') === 0 ? hex.value : '#' + hex.value); if (c) { color.value = c; apply(c); } });
         hex.addEventListener('blur', function () { hex.value = color.value; });
         var presets = h('div', { class: 'pds-presets', role: 'group', 'aria-label': opts.label + ' presets' }, PRESETS.map(function (c) {
-          return h('button', { class: 'pds-preset', type: 'button', title: c, 'aria-label': opts.label + ' ' + c, 'data-color': c, style: { '--sw': c }, disabled: ro() ? true : null, onclick: function () { color.value = c; hex.value = c; apply(c); } });
+          return h('button', { class: 'pds-preset', type: 'button', title: c, 'aria-label': opts.label + ' ' + c, 'data-color': c, style: { '--sw': c }, disabled: ro() ? true : null, onclick: function () { color.value = c; hex.value = c; apply(c, true); } });
         }));
         var node = h('div', { class: 'pds-colorrow', 'data-colorrow': opts.key }, [
           h('div', { class: 'pds-colorrow-label' }, [h('b', null, [opts.label]), h('span', null, [opts.help])]),
           h('div', { class: 'pds-colorrow-ctls' }, [h('div', { class: 'pds-ctl-row' }, [color, hex, reset]), presets])
         ]);
         var presetEls = Array.prototype.slice.call(presets.children);
-        return { node: node, sync: function () {
+        return { node: node, value: function () { return normHex(effective(opts.role)); }, sync: function () {
           var c = normHex(effective(opts.role)) || '#888888';
           presetEls.forEach(function (b) { var on = b.getAttribute('data-color') === c; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(on)); });
           if (document.activeElement === color || document.activeElement === hex) return;
@@ -277,7 +297,7 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
           nebBox.appendChild(h('button', {
             class: 'pds-neb' + (name === cur && cosmos ? ' on' : ''), type: 'button', role: 'radio', 'aria-checked': String(name === cur && cosmos), 'data-nebula': name, title: name,
             disabled: !cosmos || ro() ? true : null, style: { background: 'radial-gradient(circle at 30% 30%, ' + c[0] + ', transparent 60%), radial-gradient(circle at 75% 70%, ' + c[1] + ', transparent 62%), linear-gradient(135deg,' + c[2] + ',#12131f)' },
-            onclick: function () { store.commit('Look: nebula', function (d) { var m = d.deck.meta; m.themePatch = m.themePatch || {}; m.themePatch.world = m.themePatch.world || {}; m.themePatch.world.nebula = name; }); }
+            onclick: function () { store.commit('Look: nebula', function (d) { var m = d.deck.meta; m.themePatch = m.themePatch || {}; m.themePatch.world = m.themePatch.world || {}; m.themePatch.world.nebula = name; }, ONE); }
           }, [h('span', null, [name])]));
         });
         nebHelp.textContent = cosmos ? 'The glow behind scenes that do not choose their own.' : 'Nebulae belong to the Cosmos look.';
@@ -315,9 +335,13 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
       function takeFonts(list) {
         if (ro() || !list.length) return Promise.resolve(false);
         return store.addFiles(list).then(function (res) {
+          // a font the deck already has (dropped a second time) is not added again: it simply becomes the brand font
+          var f = res.added.concat(res.existing || []).filter(function (x) { return x.kind === 'font'; });
           res.rejected.forEach(function (r) { ui.toast(r.message, 'error'); });
-          res.warnings.forEach(function (w) { if (w.kind === 'big-total') ui.banner(w.msg, 'warn', { key: 'big-total' }); else ui.toast(w.msg, 'warn'); });
-          var f = res.added.filter(function (x) { return x.kind === 'font'; });
+          res.warnings.forEach(function (w) {
+            if (w.kind === 'duplicate' && f[0] && w.id === f[0].id) return;
+            if (w.kind === 'big-total') ui.banner(w.msg, 'warn', { key: 'big-total' }); else ui.toast(w.msg, 'warn');
+          });
           if (!f.length) return false;
           return store.setBrandFont(f[0].id).then(function (ok) {
             if (ok) ui.toast('Your font is in. The previews use it now.' + (f.length > 1 ? ' The other ' + (f.length - 1) + (f.length === 2 ? ' is' : ' are') + ' in your assets.' : ''));
@@ -349,7 +373,11 @@ PD.module('studio/screens/look', ['studio/app'], function (PD, app) {
       ctls.appendChild(ctl('Nebula', nebBox, nebHelp));
       ctls.appendChild(ctl('Brand font', fontBox, h('p', { class: 'pds-ctl-help' }, ['Embedded in the saved file, so it travels with the deck.'])));
 
-      function syncControls() { accentCtl.sync(); futureCtl.sync(); paintNebulae(); paintFont(); paintCards(); }
+      // a look whose future colour is its accent (Slate's are both the warm light) would hide the turn: say so under the picker
+      var sameNote = h('p', { class: 'pds-ctl-help', 'data-note': 'future-same', hidden: true }, ['In this look it is the same colour as the accent. Pick another one if you want the turn to stand out.']);
+      futureCtl.node.appendChild(sameNote);
+      function paintFutureHelp() { sameNote.hidden = !(futureCtl.value() && futureCtl.value() === accentCtl.value()); }
+      function syncControls() { accentCtl.sync(); futureCtl.sync(); paintFutureHelp(); paintNebulae(); paintFont(); paintCards(); paintNameNote(); }
       syncControls();
       refreshViews('play');
 

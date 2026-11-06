@@ -16,9 +16,10 @@
  *     assets.put(record) → Promise<bool>        IndexedDB 'pdstudio' / 'assets', keyPath hash
  *     assets.get(hash) → Promise<record | null>, assets.getMany(hashes) → Promise<{ [hash]: record }>
  *     handles.get(projectId) → Promise<FileSystemFileHandle | null>, .put(projectId, handle, name), .remove(projectId)
- *     lock(projectId) → Promise<{ held, release(), takeOver(), onLost(fn) }>
+ *     lock(projectId) → Promise<{ held, release(), takeOver() → Promise, onLost(fn) }>
  *         BroadcastChannel 'pdstudio:lock:<id>': the first tab holds the project; a second tab asking is told so and opens
- *         read-only. takeOver() makes the other tab let go. Without BroadcastChannel every tab simply holds.
+ *         read-only. takeOver() makes the other tab let go: its onLost handler runs (and saves), then it answers, and the
+ *         promise resolves (after 1.5 s at most when nobody answers). Without BroadcastChannel every tab simply holds.
  *     target(projectId, suggestedName, opts?) → Promise<Target>     where a presentation file will go, chosen while the
  *         click that asked for the save still counts as a user gesture (spec §7.6): Chrome's save picker (or the handle
  *         remembered for this project), else a download. opts.saveAs forces the picker.
@@ -193,27 +194,47 @@ PD.module('studio/persist', [], function (PD) {
   };
 
   /* ---------------------------------------------------------- two tabs, one project (spec §7.7) */
+  // takeOver() → Promise, resolved once the tab that held the project has let go: its lost handler runs first (the shell
+  // writes its last edits to storage there), then it answers 'released'. A holder that has gone quiet (closed, frozen) is
+  // waited for TAKEOVER_MS at most. The caller reads the project from storage after that, never from its own stale copy.
+  var TAKEOVER_MS = 1500;
+  function noLock() { return { held: true, release: function () { }, takeOver: function () { return Promise.resolve(); }, onLost: function () { } }; }
   function lock(projectId) {
     return new Promise(function (resolve) {
-      if (typeof BroadcastChannel !== 'function') return resolve({ held: true, release: function () { }, takeOver: function () { }, onLost: function () { } });
-      var ch, me = rand4() + rand4(), held = false, lostFn = null, closed = false, probing = true, busy = false;
+      if (typeof BroadcastChannel !== 'function') return resolve(noLock());
+      var ch, me = rand4() + rand4(), held = false, lostFn = null, closed = false, probing = true, busy = false, released = null;
       try { ch = new BroadcastChannel('pdstudio:lock:' + projectId); }
-      catch (e) { return resolve({ held: true, release: function () { }, takeOver: function () { }, onLost: function () { } }); }
+      catch (e) { return resolve(noLock()); }
       ch.onmessage = function (e) {
         var m = e.data;
         if (!m || m.from === me) return;
         if (m.type === 'who' && held) ch.postMessage({ type: 'held', to: m.from, from: me });
         else if (m.type === 'held' && m.to === me && probing) busy = true;
-        else if (m.type === 'takeover' && held) { held = false; if (lostFn) lostFn(); }
+        else if (m.type === 'takeover' && held) {
+          held = false;
+          try { if (lostFn) lostFn(); } catch (err) { try { console.error('studio: the lock-lost handler failed', err); } catch (e2) { } }
+          try { ch.postMessage({ type: 'released', to: m.from, from: me }); } catch (e3) { }
+        }
+        else if (m.type === 'released' && m.to === me && released) released();
       };
       var api = {
         get held() { return held; },
         release: function () {
           if (closed) return;
           closed = true; held = false;
+          if (released) released();
           try { ch.close(); } catch (e) { }
         },
-        takeOver: function () { held = true; try { ch.postMessage({ type: 'takeover', from: me }); } catch (e) { } },
+        takeOver: function () {
+          held = true;
+          if (released) return released.p;                  // a second click while the first is still waiting
+          var done, timer = 0, p = new Promise(function (r) { done = r; });
+          released = function () { released = null; clearTimeout(timer); done(); };
+          released.p = p;
+          timer = setTimeout(released, TAKEOVER_MS);
+          try { ch.postMessage({ type: 'takeover', from: me }); } catch (e) { released(); }
+          return p;
+        },
         onLost: function (fn) { lostFn = fn; }
       };
       ch.postMessage({ type: 'who', from: me });

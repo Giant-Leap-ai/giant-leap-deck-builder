@@ -89,13 +89,17 @@ PD.module('studio/screens/welcome', ['studio/app', 'studio/persist'], function (
       el.appendChild(h('div', { class: 'pds-welcome-shade', 'aria-hidden': 'true' }));
       el.appendChild(page);
 
-      // the backdrop is decoration: if the engine cannot draw it, the page is complete without
-      requestAnimationFrame(function () {
+      // the backdrop is decoration: if the engine cannot draw it, the page is complete without. It starts a frame later, so a
+      // Welcome that is left again at once (opening a deck from inside another one passes through here) must not start it at all:
+      // a stage built on a detached canvas would tick and draw for ever.
+      var gone = false, startRaf = requestAnimationFrame(function () {
+        startRaf = 0;
+        if (gone || !canvas.isConnected) return;
         try { view = S.stageView(canvas, PD.compile(heroDeck()), { quality: 1, maxDpr: 1.5 }); view.replay(); }
         catch (e) { try { console.warn('studio: the Welcome backdrop did not start', e); } catch (e2) { } }
       });
       newBtn.focus({ preventScroll: true });
-      return { unmount: function () { if (view) view.destroy(); view = null; } };
+      return { unmount: function () { gone = true; if (startRaf) cancelAnimationFrame(startRaf); startRaf = 0; if (view) view.destroy(); view = null; } };
     }
   });
   return {};

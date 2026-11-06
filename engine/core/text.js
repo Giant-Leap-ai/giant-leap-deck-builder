@@ -98,7 +98,8 @@ PD.module('core/text', ['core/util', 'core/ease'], function (PD, util, ease) {
     var f = this.o.fill;
     if (Array.isArray(f)) {
       var g = this.o.fillDir === 'h' ? ctx.createLinearGradient(x0, 0, x0 + w, 0) : ctx.createLinearGradient(0, y0, 0, y0 + h);
-      for (var i = 0; i < f.length; i++) g.addColorStop(i / (f.length - 1), COLORS[f[i]] || f[i]);
+      // one stop is a solid colour (0 / 0 is NaN, which addColorStop rejects); as in elements/counter.js
+      for (var i = 0; i < f.length; i++) g.addColorStop(f.length < 2 ? 0 : i / (f.length - 1), COLORS[f[i]] || f[i]);
       return g;
     }
     return COLORS[f] || f;

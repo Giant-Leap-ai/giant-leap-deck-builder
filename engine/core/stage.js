@@ -34,6 +34,16 @@ PD.module('core/stage', ['core/util', 'core/ease', 'core/glow', 'core/shapes', '
     warned[key] = 1;
     try { console.warn(msg); } catch (e) { }
   }
+  function errorOnce(msg) {        // a draw failure (Stage.fault), logged once per distinct message
+    if (warned['draw:' + msg]) return;
+    warned['draw:' + msg] = 1;
+    try { console.error(msg); } catch (e) { }
+  }
+  // after a draw failure: a fresh context state (setting the width resets it, the save() stack included)
+  function resetContext(ctx, canvas) {
+    if (typeof ctx.reset === 'function') ctx.reset();
+    else { var w = canvas.width; canvas.width = w; }
+  }
 
   /* ---------------------------------------------------------- world registry (spec §4.5)
    * PD.world(name, plugin) validates before it registers, so a bad plugin throws at registration and leaves nothing
@@ -138,6 +148,7 @@ PD.module('core/stage', ['core/util', 'core/ease', 'core/glow', 'core/shapes', '
     this.S = 1; this.ox = 0; this.oy = 0;
     this.quality = 1.5;
     this.layerUid = 0;
+    this.faults = []; this.ctxDirty = false; this.redo = false; this.faultedLayers = new WeakSet();   // draw failures (P.fault)
     this.loadDeck(checkDeck(this.opts.deck, 'new PD.Stage(canvas, { deck })'));
   }
 
@@ -560,13 +571,59 @@ PD.module('core/stage', ['core/util', 'core/ease', 'core/glow', 'core/shapes', '
       this.oy = Math.round((ch - DH * this.S) / 2);
     };
 
+    /* Drawing never takes the stage down (spec §4.2: the deck never crashes on stage). A pass, element, reveal or exit
+     * that throws while drawing loses only its own drawing: the other layers and the later passes, blackout included,
+     * still draw. Each failure goes into stage.faults (distinct messages, at most 50; the export self-test reports and
+     * empties it) and is logged once per distinct message as a console error. The first time something throws, the
+     * frame is drawn again from a reset context (the throw can leave ctx.save() levels and canvas state behind); from
+     * then on that pass or layer is drawn through guarded(), which gives it a save()/restore() level of its own and
+     * closes every level it leaves open. None of this runs until something throws: a deck that draws cleanly draws
+     * exactly as before. */
+    P.fault = function (what, e) {
+      var msg = what + ' could not be drawn: ' + (e && e.message ? e.message : String(e));
+      var si = this.cur ? this.cur.slide : 0, sc = this.deck && this.deck.scenes[si];
+      if (this.faults.length < 50 && this.faults.indexOf(msg) < 0) this.faults.push(msg);
+      errorOnce('pixeldeck: scene ' + (si + 1) + (sc && sc.id != null ? ' "' + sc.id + '"' : '') + ': ' + msg +
+        ' (skipped; the rest of the frame still draws)');
+    };
+    // a first failure inside an unguarded draw: redraw this frame, and put back for the rest of this pass through it
+    // the transform, alpha and blending a screen (or camera) pass starts with
+    P.firstFault = function (what, e, cam, jx, jy) {
+      var ctx = this.ctx, S = this.S;
+      this.fault(what, e);
+      this.ctxDirty = true; this.redo = true;
+      ctx.setTransform(S, 0, 0, S, this.ox, this.oy); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      if (cam) { ctx.translate(CX + jx, CY + jy); ctx.rotate(this.W.roll); ctx.translate(-CX, -CY); }
+    };
+    // fn.call(self, ctx, a, b, c, d) inside a save()/restore() of its own that also closes the save() levels it leaves
+    // open (and ignores restore() calls below its level); returns { e } when it threw, else null
+    P.guarded = function (fn, self, a, b, c, d) {
+      var ctx = this.ctx, save = ctx.save, restore = ctx.restore, hadS = has(ctx, 'save'), hadR = has(ctx, 'restore');
+      var open = 0, out = null;
+      save.call(ctx);
+      ctx.save = function () { open++; save.call(ctx); };
+      ctx.restore = function () { if (open > 0) { open--; restore.call(ctx); } };
+      try { fn.call(self, ctx, a, b, c, d); } catch (e) { out = { e: e }; }
+      if (hadS) ctx.save = save; else delete ctx.save;
+      if (hadR) ctx.restore = restore; else delete ctx.restore;
+      while (open > 0) { open--; restore.call(ctx); }
+      restore.call(ctx);
+      return out;
+    };
+    function passName(p) { return 'the "' + p.world + '.' + p.name + '" pass'; }
+
     /* The sorted pass list (spec §4.5 table). The stage clears to black at the identity transform, draws the shake
      * jitter (two Math.random calls, only when W.shake + shakeV ≠ 0), sets the design transform and clips; before
      * the first camera pass it applies the camera (translate CX+jx, CY+jy; rotate W.roll; translate back) and after
      * the last consecutive camera pass it restores; then the final restore. */
     P.draw = function () {
+      this.drawPasses();
+      if (this.redo) { this.redo = false; this.drawPasses(); }      // something threw for the first time (P.fault)
+    };
+    P.drawPasses = function () {
       Glow.frame();
       var ctx = this.ctx, W = this.W, S = this.S;
+      if (this.ctxDirty) { this.ctxDirty = false; resetContext(ctx, this.canvas); }    // after a first failure (P.fault)
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = '#000';
@@ -576,14 +633,17 @@ PD.module('core/stage', ['core/util', 'core/ease', 'core/glow', 'core/shapes', '
       ctx.setTransform(S, 0, 0, S, this.ox, this.oy);
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, DW, DH); ctx.clip();
-      var f = this.f, passes = this.passes, cam = false;
+      var f = this.f, passes = this.passes, cam = false, bad;
       f.T = this.T; f.S = S;
       for (var i = 0; i < passes.length; i++) {
         var p = passes[i];
         if (p.space === 'camera') {
           if (!cam) { ctx.save(); ctx.translate(CX + jx, CY + jy); ctx.rotate(W.roll); ctx.translate(-CX, -CY); cam = true; }
         } else if (cam) { ctx.restore(); cam = false; }
-        p.draw(ctx, W, p.state, f);
+        if (!p.faulted) {
+          try { p.draw(ctx, W, p.state, f); }
+          catch (e) { p.faulted = true; this.firstFault(passName(p), e, cam, jx, jy); }
+        } else if ((bad = this.guarded(p.draw, p, W, p.state, f))) this.fault(passName(p), bad.e);
       }
       if (cam) ctx.restore();
       ctx.restore();

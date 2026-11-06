@@ -7,15 +7,51 @@
  *
  * big-number draws a 'counter' element, and logo / image draw 'image' elements (engine/elements/{counter,image}.js).
  * Their examples name the assets 'logo' and 'photo'; the Studio (or a deck's assets.js) supplies the pictures.
+ * big-number never shows a number nobody gave: until `value` is a number, the stage shows what is there instead (the
+ * storyboard seed's prompt {number}), which the Director reports as placeholder text (AMEND-10, P9).
  *
  * Registration allocates nothing, touches no DOM and draws no random number. */
 PD.module('templates/essentials', [], function (PD) {
   var CX = 960, CY = 540;
   var ALL_ROLES = ['hook', 'setup', 'identity', 'scale', 'relevance', 'emotion', 'proof', 'tension', 'turn', 'idea', 'climax', 'resolution', 'cta', 'callback'];
+  var has = function (o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); };
 
   function str(v) { return v == null ? '' : String(v); }
   function list(v) { return Array.isArray(v) ? v : v == null ? [] : [v]; }
   function num(v, d) { return typeof v === 'number' && isFinite(v) ? v : d; }
+  function styleOf(env, name) { var s = env.theme && env.theme.styles; return (s && s[name]) || {}; }
+  // the height of a block of n lines in a style at a size (the text element's rule: size + (n - 1) · size · lineHeight)
+  function blockH(env, style, size, n) { var st = styleOf(env, style), sz = size || st.size || 0; return sz + Math.max(0, n - 1) * sz * (st.lineHeight || 1.12); }
+  // the lines the text element (engine/core/text.js) breaks `s` into at maxW: the same greedy word wrap, measured with
+  // env.measure so a block can be laid out before the stage builds it. memo (per style and size) caches the widths.
+  function wrapAt(env, s, style, size, maxW, memo) {
+    function wide(c) {
+      if (!has(memo, c)) { var m = env.measure(c, style, size); memo[c] = m.lines.length > 1 ? Infinity : m.w; }
+      return memo[c] > maxW;
+    }
+    var lines = [];
+    String(s).split('\n').forEach(function (para) {
+      var words = para.split(' '), line = '';
+      for (var i = 0; i < words.length; i++) {
+        var cand = line ? line + ' ' + words[i] : words[i];
+        if (line && wide(cand)) { lines.push(line); line = words[i]; } else line = cand;
+      }
+      lines.push(line);
+    });
+    return lines;
+  }
+  // even lines: the narrowest wrap width up to maxW that keeps the number of lines `s` needs at maxW, so a wrapped line
+  // does not end on one stray word. → { maxWidth, lines } (maxWidth is maxW when s fits on one line)
+  function balance(env, s, style, size, maxW) {
+    var memo = Object.create(null), at = wrapAt(env, s, style, size, maxW, memo), n = at.length;
+    if (n < 2) return { maxWidth: maxW, lines: n };
+    var total = 0;
+    at.forEach(function (l) { total += env.measure(l, style, size).w; });
+    var lo = Math.max(1, Math.floor(total / n) - 1), hi = Math.ceil(maxW);
+    if (wrapAt(env, s, style, size, lo, memo).length <= n) hi = lo;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (wrapAt(env, s, style, size, mid, memo).length <= n) hi = mid; else lo = mid; }
+    return { maxWidth: Math.min(maxW, hi + 2), lines: n };
+  }
   // 1234.5 → '1,234.5' with `dec` decimals (the counter element formats its numbers the same way)
   function fmt(n, dec, sep) {
     var s = Math.abs(n).toFixed(dec), parts = s.split('.');
@@ -74,11 +110,17 @@ PD.module('templates/essentials', [], function (PD) {
       shot: { type: 'shot', label: 'World', default: 'DRIFT' }
     },
     example: { value: 62, decimals: 0, prefix: '', suffix: '%', label: 'of your audience feels this every week', source: 'Your source, 2026', reveal: 'count', shot: 'DRIFT' },
-    seed: { value: 0, label: '{what the number means}' },
+    // the storyboard asks for the number like any other line: a seeded 0 would put "0%" on stage that nobody gave
+    seed: { value: '{number}', label: '{what the number means}' },
     expand: function (p, env) {
       var dec = Math.min(3, Math.max(0, Math.round(num(p.decimals, 0))));
       var sc = { world: env.shot(p.shot), worldTime: 2.4, text: [], dwell: 5 };
-      if (p.reveal === 'particles') {
+      if (num(p.value, null) === null) {
+        // no number yet: show what is there (the seed's {number} prompt, or {number} when it is empty) as plain text, never
+        // a made-up 0 with a unit; a {…} on stage is copy.placeholder for the Director, and anything else is a prop-type error
+        var shown = str(p.value).trim() || '{number}';
+        sc.text.push({ id: 'num', str: shown, style: 'mega', y: 450, reveal: p.reveal === 'particles' ? 'particles' : 'fade' });
+      } else if (p.reveal === 'particles') {
         sc.motion = { stagger: 'leftToRight', spread: 1.2 };
         sc.text.push({ id: 'num', str: str(p.prefix) + fmt(num(p.value, 0), dec, ',') + str(p.suffix), style: 'mega', y: 450, reveal: 'particles' });
       } else {
@@ -105,16 +147,20 @@ PD.module('templates/essentials', [], function (PD) {
     example: { quote: 'We stopped asking for permission and started shipping.', who: 'A customer', role: 'Interview, 2026', shot: 'DRIFT' },
     seed: { quote: '{quote}', who: '{who}' },
     expand: function (p, env) {
+      // a quote that wraps does so in even lines (no last line of one word), and who said it sits 72 px under the quote's
+      // last line, whatever its length (y 675 for four lines, the most the prop allows; 570 for one)
+      var q = '“' + str(p.quote) + '”', b = balance(env, q, 'statement', 56, 1300);
+      var whoY = Math.round(470 + blockH(env, 'statement', 56, b.lines) / 2 + 72);
       var sc = {
         world: env.shot(p.shot),
         worldTime: 2.4,
         text: [
-          { str: '“' + str(p.quote) + '”', style: 'statement', size: 56, maxWidth: 1300, y: 470, reveal: 'letters' },
-          { str: str(p.who), style: 'label', y: 700, at: 2.2 }
+          { str: q, style: 'statement', size: 56, maxWidth: b.maxWidth, y: 470, reveal: 'letters' },
+          { str: str(p.who), style: 'label', y: whoY, at: 2.2 }
         ],
         dwell: 5
       };
-      if (str(p.role)) sc.text.push({ str: str(p.role), style: 'caption', y: 745, at: 2.5 });
+      if (str(p.role)) sc.text.push({ str: str(p.role), style: 'caption', y: whoY + 45, at: 2.5 });
       return sc;
     }
   });
@@ -153,8 +199,16 @@ PD.module('templates/essentials', [], function (PD) {
       if (typeof accent !== 'string') accent = '#ffd27a';                    // the look's accent colour marks each point
       // rows: y = 330 + k · 170 (five rows are packed tighter so the last one stays on the screen)
       var y0 = n <= 4 ? 330 : 310, pitch = n <= 4 ? 170 : 150;
-      // columns: x = 960 + (k − (n − 1) / 2) · 560, each 480 wide (more columns squeeze together, inside 120 px margins)
-      var pitchX = Math.min(560, Math.floor(1680 / Math.max(1, n))), colW = Math.min(480, pitchX - 40);
+      // columns: x = 960 + (k − (n − 1) / 2) · 560, each 480 wide (more columns squeeze together, inside 120 px margins).
+      // A title wraps inside its column rather than run into the next one; titles start at y 459 and every detail starts
+      // at the same height, 24 px under the tallest title, so the column tops line up.
+      var pitchX = Math.min(560, Math.floor(1680 / Math.max(1, n))), colW = Math.min(480, pitchX - 40), colTop = 459, detailTop = 0;
+      if (cols) {
+        var memoT = Object.create(null), memoD = Object.create(null);
+        var titleLines = items.map(function (it) { return wrapAt(env, str(it && it.title), 'label', null, colW, memoT).length; });
+        var detailLines = items.map(function (it) { return str(it && it.line) ? wrapAt(env, str(it.line), 'statement', 44, colW, memoD).length : 0; });
+        detailTop = colTop + blockH(env, 'label', null, Math.max.apply(null, titleLines.concat(1))) + 24;
+      }
       var sc = {
         world: env.shot(p.shot),
         worldTime: 2.4,
@@ -164,11 +218,11 @@ PD.module('templates/essentials', [], function (PD) {
           if (cols) {
             var x = CX + (k - (n - 1) / 2) * pitchX;
             step.particles.push({ shape: 'points', points: ring(x, 400, 22, 15, 6, accent) });
-            step.text.push({ str: title, style: 'label', x: x, y: 470, reveal: 'rise' });
-            if (line) step.text.push({ str: line, style: 'statement', size: 44, x: x, y: 600, maxWidth: colW, reveal: 'rise', at: 0.15 });
+            step.text.push({ str: title, style: 'label', x: x, y: colTop + blockH(env, 'label', null, titleLines[k]) / 2, maxWidth: colW, reveal: 'rise' });
+            if (line) step.text.push({ str: line, style: 'statement', size: 44, x: x, y: detailTop + blockH(env, 'statement', 44, detailLines[k]) / 2, maxWidth: colW, reveal: 'rise', at: 0.15 });
           } else {
             var y = y0 + k * pitch;
-            step.particles.push({ shape: 'points', points: ring(110, y + 24, 22, 15, 6, accent) });
+            step.particles.push({ shape: 'points', points: ring(110, y, 22, 15, 6, accent) });     // the bullet sits on the title's line
             step.text.push({ str: title, style: 'label', x: 160, y: y, align: 'left', reveal: 'rise' });
             if (line) step.text.push({ str: line, style: 'statement', size: 44, x: 160, y: y + 52, align: 'left', reveal: 'rise', at: 0.15 });
           }
@@ -176,7 +230,7 @@ PD.module('templates/essentials', [], function (PD) {
         }),
         dwell: 3
       };
-      if (str(p.kicker)) sc.text.push({ str: str(p.kicker), style: 'kicker', x: 160, y: 150, align: 'left' });
+      if (str(p.kicker)) sc.text.push(cols ? { str: str(p.kicker), style: 'kicker', x: CX, y: 150 } : { str: str(p.kicker), style: 'kicker', x: 160, y: 150, align: 'left' });   // centred over centred columns
       return sc;
     }
   });

@@ -42,7 +42,7 @@ PD.module('studio/screens/board', [], function (PD) {
     '.bx-guide .t { font-size: 13.5px; line-height: 1.4; font-weight: 620; letter-spacing: -.008em; }',
     '.bx-guide .s { font-size: 12.5px; line-height: 1.45; color: var(--pdx-muted); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }',
     '.bx-guide.is-ok .bx-prog i { background: var(--pdx-ok); }',
-    '@container (max-height: 540px) { .bx-guide .s { display: none; } }'
+    '@container (max-height: 540px) { .bx-guide:not(.is-tell) .s { display: none; } }'
   ].join('\n');
 
   var current = null;
@@ -180,20 +180,39 @@ PD.module('studio/screens/board', [], function (PD) {
         sub = nxt ? 'Next up: scene ' + (nxt.i + 1) + (b ? ', ' + b.label : '') + '. ' + (b ? b.ask : 'Replace the amber prompts.') : '';
         btn = { label: 'Write scene ' + (nxt ? nxt.i + 1 : ''), ic: 'pen', fn: function () { nextToWrite(true); } }; tag = 'write';
       } else if (errs.length) {
+        var e0 = lead(errs);
         title = errs.length === 1 ? 'One thing to fix before it is stage-ready.' : errs.length + ' things to fix before it is stage-ready.';
-        sub = errs[0].msg; btn = { label: 'Show me', ic: 'eye', fn: function () { showFinding(errs[0]); } }; tag = 'fix';
+        sub = subFor(e0); btn = actionFor(e0); tag = 'fix';
       } else if (warns.length) {
+        var w0 = lead(warns);
         title = 'Every scene has your words. ' + f.plural(warns.length, 'suggestion') + ' could tighten it.';
-        sub = warns[0].msg; btn = { label: 'Show me', ic: 'eye', fn: function () { showFinding(warns[0]); } }; tag = 'polish';
+        sub = subFor(w0); btn = actionFor(w0); tag = 'polish';
       } else {
         title = 'Every scene has your words, and the Director is happy.'; sub = S.say('lint.clean');
         btn = { label: 'Rehearse it', ic: 'expand', fn: goRehearse }; guide.classList.add('is-ok'); tag = 'rehearse'; prog = 100;
       }
       guide.dataset.stage = tag;
+      guide.classList.toggle('is-tell', !btn && !!sub);           // no button: the sentence under the title is the advice, so it stays
       guide.appendChild(h('div', { class: 'hd' }, [h('span', { class: 'pdx-cap', text: r ? 'Sample' : 'Your next step' }), h('span', { class: 'sp' }), total && !r ? h('small', { text: done + ' of ' + total + ' written' }) : null]));
       if (total) guide.appendChild(h('div', { class: 'bx-prog', style: { '--p': prog + '%' } }, h('i')));
       guide.appendChild(h('div', { class: 'go' }, [h('div', null, [h('div', { class: 't', text: title }), sub ? h('div', { class: 's', text: sub }) : null]),
         btn ? h('button', { type: 'button', class: 'pdx-btn is-primary', dataset: { act: 'guide' }, onclick: btn.fn }, [icon(btn.ic, 15), h('span', { text: btn.label })]) : null]));
+    }
+    // a finding about the whole talk (pace.runtime, story.idea-early …) has no scene to show: the guide says its fix instead of
+    // offering a Show me that would do nothing, and a talk that runs short gets the one thing that helps, a new scene where the
+    // evidence goes (the fix says "Add a story, not more text")
+    function subFor(fd) { return fd.sceneId == null && fd.fix ? fd.msg + ' ' + fd.fix : fd.msg; }
+    function addAtForStory() {
+      var inf = infos(), at = -1;
+      inf.forEach(function (x) { if (x.beat && x.beat.roles.indexOf('proof') >= 0) at = x.i + 1; });
+      return at >= 0 ? at : Math.max(0, inf.length - 1);
+    }
+    // the finding the guide leads with: the first one it can act on (a scene to show, or a scene to add), else the first one
+    function lead(list) { for (var i = 0; i < list.length; i++) if (actionFor(list[i])) return list[i]; return list[0]; }
+    function actionFor(fd) {
+      if (fd.sceneId != null) return { label: 'Show me', ic: 'eye', fn: function () { showFinding(fd); } };
+      var short = fd.id === 'pace.runtime' && fd.vars && +fd.vars.est < +fd.vars.target;
+      return short ? { label: 'Add a scene', ic: 'plus', fn: function () { openAdd(addAtForStory()); } } : null;
     }
     function paintParts(what) {
       var c = compiled(), sel = store.selection(), inf = infos(), L = store.lint(), si = selInfo();
@@ -382,9 +401,17 @@ PD.module('studio/screens/board', [], function (PD) {
       var inf = infos(), c = compiled(), F0 = fw(), st = story();
       inspector.flush();
       if (kind === 'logo-scene') {
+        // after the identity beat's scenes; where that beat belongs when it has none; else (a shape with no identity beat,
+        // sparkline) a sign-off at the end, in the last scene's beat, so the Studio's own button never leaves a scene that
+        // "doesn't serve any beat" (story.unassigned) or runs the arc backwards (story.beat-order)
         var at = inf.length, idBeat = inf.filter(function (x) { return x.beat && x.beat.roles.indexOf('identity') >= 0; });
-        if (idBeat.length) at = idBeat[idBeat.length - 1].i + 1;
-        var beat = idBeat.length ? idBeat[0].beat : (F0 && F0.beats.find(function (b) { return b.roles.indexOf('identity') >= 0; })) || null;
+        var fb = F0 && F0.beats.find(function (b) { return b.roles.indexOf('identity') >= 0; }), beat = null;
+        if (idBeat.length) { at = idBeat[idBeat.length - 1].i + 1; beat = idBeat[0].beat; }
+        else if (fb) {
+          var bOrder = F0.beats.map(function (b) { return b.id; }), ti = bOrder.indexOf(fb.id);
+          beat = fb;
+          for (var k = 0; k < inf.length; k++) if (inf[k].beat && bOrder.indexOf(inf[k].beat.id) > ti) { at = k; break; }
+        } else if (inf.length) beat = inf[inf.length - 1].beat || null;
         var sc = f.newSceneFor('logo', beat, st, takenIds()); sc.props.asset = id;
         commitAdd(at, sc, 'Add logo scene');
       } else if (kind === 'image-scene') {
@@ -444,7 +471,7 @@ PD.module('studio/screens/board', [], function (PD) {
       preview.setDeck(c, { at: { slide: Math.max(0, idx), step: sel.step || 0 } });
       paintParts({ film: true, arc: true, dir: true, assets: true, guide: true });
       inspector.update(inspectorState());
-      setTimeout(function () { var i2 = selInfo(); if (i2) filmstrip.scrollTo(i2.id); }, 60);
+      setTimeout(function () { if (dead || !store.get()) return; var i2 = selInfo(); if (i2) filmstrip.scrollTo(i2.id); }, 60);     // the project may have closed meanwhile
       store._kick && store._kick();
     })();
 

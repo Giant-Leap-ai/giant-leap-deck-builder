@@ -50,6 +50,14 @@ T.test('copy: COPY_PARTS splits a question into its title and help; say() / fmt(
   a.equal(P['lint.ready'].length, 1);
   a.equal(PD.story.say('assets.heic', { ext: 'heic' }), "Can't use .heic yet. Export it as PNG or JPEG.");
   a.equal(PD.story.say('lint.summary', { e: 0, w: 1, i: 3 }), '0 to fix, 1 to consider, 3 tips.');
+  // counts of one read in the singular (open item b): the Director's summary and the export's notReady row
+  a.equal(PD.story.say('lint.summary', { e: 1, w: 1, i: 1 }), '1 to fix, 1 to consider, 1 tip.');
+  a.equal(PD.story.say('lint.summary', { e: 0, w: 0, i: 0 }), '0 to fix, 0 to consider, 0 tips.');
+  a.equal(PD.story.say('lint.notReady', { e: 1 }), "1 thing to fix before it's stage-ready. You can still present.");
+  a.equal(PD.story.say('lint.notReady', { e: 4 }), "4 things to fix before it's stage-ready. You can still present.");
+  a.equal(PD.story.fmt('{n} {n|scene|scenes}', { n: '1' }), '1 scene', 'a numeric string counts');
+  a.equal(PD.story.fmt('{n|scene|scenes}', {}), '{n|scene|scenes}', 'with no count the plural stays as it is, like any unknown token');
+  a.equal(PD.story.say('q.proof.value'), 'Add the number itself, so it can count up on screen.');
   a.equal(PD.story.say('board.placeholder', {}), "Answer '{token}' in the interview, or type over it.", 'an unknown token stays');
   a.equal(PD.story.say('no.such.key'), '');
   a.equal(PD.story.fmt('{a} and {b} and {a}', { a: 'x', b: 0 }), 'x and 0 and x', 'a zero is a value');
@@ -70,11 +78,17 @@ T.test('copy: the six copy devices of §6.8 are available to the editor', functi
   PD.story.DEVICES.forEach(function (d) { a.ok(d.label && d.tip, d.id); });
 });
 
-T.test('copy: STOPWORDS, IMPERATIVES and JARGON are the §6.7 lists', function (a) {
+T.test('copy: STOPWORDS, IMPERATIVES and JARGON are the §6.7 lists (IMPERATIVES: §6.7 first, then the verbs an ask also starts with)', function (a) {
   a.deepEqual(PD.story.STOPWORDS, 'a an the and or but of to in on at for with is are was were be it its that this these those we you they our your their more most as by from into than so just very'.split(' '));
-  a.deepEqual(PD.story.IMPERATIVES, ("book try pick start join visit email call sign choose bring share download schedule ask talk build test pilot register apply contact follow read watch write go come reply send plan map pair stop let's").split(' '));
+  var spec = ("book try pick start join visit email call sign choose bring share download schedule ask talk build test pilot register apply contact follow read watch write go come reply send plan map pair stop let's").split(' ');
+  a.deepEqual(PD.story.IMPERATIVES.slice(0, spec.length), spec, 'the §6.7 list, in its order, comes first');
+  ['approve', 'get', 'buy', 'hire', 'fund', 'use', 'give', 'invest', 'subscribe', 'make', 'reach', 'vote', 'adopt', 'rethink', "don't"].forEach(function (w) { a.ok(PD.story.IMPERATIVES.indexOf(w) >= 0, w); });
+  ['thank', 'one', 'back', 'open', 'support', 'please'].forEach(function (w) { a.ok(PD.story.IMPERATIVES.indexOf(w) < 0, w + ' is not a verb list entry'); });
+  a.equal(PD.story.IMPERATIVES.filter(function (w, i, all) { return all.indexOf(w) !== i; }).length, 0, 'no duplicates');
   a.deepEqual(PD.story.JARGON, 'leverage synergy utilise utilize robust seamless best-in-class paradigm holistic solutions unlock game-changer'.split(' '));
   a.ok(PD.story.STOPWORDS.indexOf('not') < 0, '"not" is kept');
+  a.deepEqual(PD.story.STORY_TOKENS, ['brand', 'tagline', 'bigIdea', 'shortIdea', 'oldWay', 'newWay', 'ask', 'audience', 'proof1', 'proof2', 'proof3'], 'the §6.5 story tokens');
+  a.ok(PD.story.isStoryToken('{brand}') && PD.story.isStoryToken('proof3') && !PD.story.isStoryToken('{opening line}') && !PD.story.isStoryToken('TODO'));
 });
 
 T.test('copy: words(), tokens(), match(), echo()', function (a) {
@@ -102,11 +116,22 @@ T.test('copy: placeholders, imperatives, jargon, speech', function (a) {
   a.equal(S.placeholderIn('Lorem ipsum'), 'Lorem');
   a.equal(S.placeholderIn('TODO fix'), 'TODO');
   a.equal(S.placeholderIn('Every giant leap'), null);
+  // §6.7's /lorem|TODO/i as whole words: ordinary words that contain the letters are copy, not placeholders
+  a.equal(S.placeholderIn('Join us on Mastodon'), null, 'mas-todo-n');
+  a.equal(S.placeholderIn('Nuevos métodos'), null, 'a letter outside ASCII is still a letter');
+  a.equal(S.placeholderIn('Doloremque'), null);
+  a.equal(S.placeholderIn('TODO: the hook'), 'TODO'); a.equal(S.placeholderIn('(todo)'), 'todo'); a.equal(S.placeholderIn('lorem_ipsum'), 'lorem');
+  a.equal(S.placeholderIn('Say lorem.'), 'lorem');
   a.equal(S.placeholderIn('{this is a very very very very very very long token name}'), null, 'over 40 characters is not a token');
   a.deepEqual(S.placeholders({ a: '{x} and {y z}', b: [{ c: '{x}' }, 'none'], d: 3 }), ['{x}', '{y z}', '{x}']);
   a.equal(S.firstWord('  "Book" a pilot'), 'book'); a.equal(S.firstWord("Let’s go"), "let's");
   a.ok(S.startsImperative('Book a pilot')); a.ok(S.startsImperative("Let's make the next one together"));
   a.ok(S.startsImperative('Try it, then pick one')); a.ok(!S.startsImperative('Thank you')); a.ok(!S.startsImperative(''));
+  // the review's asks: common verbs, SCQA's own example, a polite "please"; an unanswered {ask} is no verb at all
+  ['Approve the pilot budget by Friday', 'Get in touch this week', 'Hire us for Q1', 'Buy the starter plan', 'Fund the pilot', 'Use it on Monday', 'Give us 30 minutes',
+   'Invest in your team', 'Reach out to me', 'Make one change', 'Subscribe now', 'Please book a call', 'please, try it', 'Vote yes on Thursday', 'Adopt the new process',
+   'Rethink one meeting', PD.framework.get('scqa').beats[5].example].forEach(function (t) { a.ok(S.startsImperative(t), t); });
+  ['{ask}', ' "{ask}"', '{your line}', 'Please', 'Pleased to meet you', 'Thank the room'].forEach(function (t) { a.ok(!S.startsImperative(t), t); });
   a.deepEqual(S.jargonIn('We leverage a seamless, holistic approach'), ['leverage', 'seamless', 'holistic']);
   a.deepEqual(S.jargonIn('Unlocking solutions that are game-changers'), ['unlock', 'solutions', 'game-changer']);
   a.deepEqual(S.jargonIn('Technology that makes work more human'), []);

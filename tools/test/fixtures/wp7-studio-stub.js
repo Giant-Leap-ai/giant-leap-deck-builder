@@ -58,23 +58,25 @@
       });
       compiledC = c;
     }
+    // as the real store (§7.8: "cached; recomputed 300 ms after change"): a commit keeps the last lint and starts a 300 ms timer,
+    // which lints, then starts the timing, which lints again when it lands. Nothing lints or times inside the commit itself.
     function scheduleLint() {
       lintDirty = true;
       clearTimeout(lintTimer);
-      lintTimer = setTimeout(function () { runLint(); emit('lint', lintC); }, 300);
+      lintTimer = setTimeout(function () { runLint(); emit('lint', lintC); scheduleTiming(); }, 300);
     }
     function runLint() { lintC = PD.story.lint(store.compiled(), timingC); lintDirty = false; return lintC; }
     function scheduleTiming() {
       if (timingRun && timingRun.cancel) timingRun.cancel();
       var mine = timingRun = PD.story.timing(store.compiled());
-      mine.then(function (t) { if (mine !== timingRun || !t) return; timingC = t; emit('timing', t); });
+      mine.then(function (t) { if (mine !== timingRun || !t) return; timingC = t; emit('timing', t); runLint(); emit('lint', lintC); });   // and lints again with it, as the real store
     }
     function apply(next, label, coalesce) {
       var prev = P, d = diff(prev, next);
       if (!coalesce) { undo.push(prev); if (undo.length > 100) undo.shift(); redo = []; }
       P = next;
       recompile(prev, d);
-      scheduleLint(); scheduleTiming();
+      scheduleLint();
       emit('change', { changedSceneIds: d.changedSceneIds, themeChanged: d.themeChanged, structural: d.structural, label: label });
     }
 
@@ -89,8 +91,8 @@
         apply(next, label, coalesce);
         return true;
       },
-      undo: function () { if (!undo.length) return; var prev = undo.pop(); redo.push(P); lastLabel = null; var d = diff(P, prev); P = prev; recompile(null, d); scheduleLint(); scheduleTiming(); emit('change', { changedSceneIds: d.changedSceneIds, themeChanged: d.themeChanged, structural: d.structural, label: 'undo' }); },
-      redo: function () { if (!redo.length) return; var nx = redo.pop(); undo.push(P); lastLabel = null; var d = diff(P, nx); P = nx; recompile(null, d); scheduleLint(); scheduleTiming(); emit('change', { changedSceneIds: d.changedSceneIds, themeChanged: d.themeChanged, structural: d.structural, label: 'redo' }); },
+      undo: function () { if (!undo.length) return; var prev = undo.pop(); redo.push(P); lastLabel = null; var d = diff(P, prev); P = prev; recompile(null, d); scheduleLint(); emit('change', { changedSceneIds: d.changedSceneIds, themeChanged: d.themeChanged, structural: d.structural, label: 'undo' }); },
+      redo: function () { if (!redo.length) return; var nx = redo.pop(); undo.push(P); lastLabel = null; var d = diff(P, nx); P = nx; recompile(null, d); scheduleLint(); emit('change', { changedSceneIds: d.changedSceneIds, themeChanged: d.themeChanged, structural: d.structural, label: 'redo' }); },
       canUndo: function () { return undo.length > 0; },
       canRedo: function () { return redo.length > 0; },
       select: function (sceneId, step) {
@@ -101,7 +103,7 @@
       },
       selection: function () { return { sceneId: P.studio.selected.sceneId, step: P.studio.selected.step }; },
       compiled: function () { if (!compiledC) compiledC = compileAll(); return compiledC; },
-      lint: function () { if (lintDirty || !lintC) runLint(); return lintC; },
+      lint: function () { if (!lintC) runLint(); return lintC; },        // the last result; a fresh one 300 ms after a change
       timing: function () { return timingC; },
       on: function (ev, fn) {
         if (!listeners[ev]) throw new Error('stub store: unknown event ' + ev);

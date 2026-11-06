@@ -5,15 +5,30 @@
  *   Beat = { id, label, roles: string[], share, energy: 1..5, required, min, max, ask, example, templates: string[] }
  * `templates` lists template ids in preference order; every beat names at least one adaptive template (one that needs
  * no particular world), so every beat can be built under every look. The registered objects are frozen.
+ * `example` is what a beat card offers as "Try something like …". giant-leap's are One Giant Leap's own lines (§6.2 F1);
+ * the spec gives none for F2–F4, and theirs are written for the people the Studio is for, small businesses making a deck
+ * for their own work (a bakery for sparkline, a trades firm for psf, a café's owners for scqa), not an AI consultancy.
  * blank has no beats: every rule that depends on beats is skipped, and the storyboard starts empty.
  *
  * Added to PD.story:
  *   frameworks() → Framework[]            the registered frameworks, in registration order
  *   framework(id) → Framework | null      ('blank' gives the blank framework; an unknown id gives null)
- *   recommend(story) → { id, runnerUp, row }   first match of the §6.3 table wins; story = { goal, tone } (both may be null)
+ *   recommend(story) → { id, runnerUp, row, slot? }   first match of the §6.3 table wins; story = { goal, tone } (both may
+ *                                         be null). With a slot (story.targetMin), a shape whose minimum board
+ *                                         (minScenes) is more scenes than the slot asks for (round(targetMin·60/50))
+ *                                         gives way to its runner-up when the runner-up's minimum is smaller: a 5-minute
+ *                                         inspire + cinematic talk gets sparkline (6 scenes), not giant-leap (8, about
+ *                                         7 minutes). slot: true says so, and the two swap places
+ *   baseCounts(fw, story?) → { [beatId]: n }   the scenes each beat starts with (§6.5 step 2): max(1, min) for a required
+ *                                         beat, min for an optional one, and a proof beat at least as many as the story
+ *                                         has proof rows for it (in beat order, up to its max), so no piece of evidence
+ *                                         from the brief is left without a scene
+ *   minScenes(fw, story?) → n             Σ baseCounts: the smallest board (§6.5's R, plus the proofs)
+ *   proofCount(story) → n                 the proof rows the board can show (a text or a number), at most 3
  *   RECOMMEND                             the table itself: [{ goal?: string[], tone?: string[], recommend, runnerUp }]
  *   pickText(story, id?) → string         the fw.pick sentence for a framework (the recommended one by default); it
- *                                         drops the "in {targetMin} minutes" clause when the slot is unknown
+ *                                         drops the "in {targetMin} minutes" clause when the slot is unknown, and says
+ *                                         fw.pick.slot when the slot moved the recommendation
  *   defaultTheme(tone) → 'cosmos' | 'slate'   cinematic → cosmos, anything else → slate
  *   energyCurve(fw) → [{ beat, mid, energy }]  each beat's energy at the midpoint of its share (the ideal arc)
  *   idealEnergy(fw, pos) → number         the ideal curve at runtime position pos (0..1): linear between midpoints, flat
@@ -62,51 +77,51 @@ PD.module('story/frameworks', ['story/copy'], function (PD, copy) {
       bestFor: 'persuading people to change',
       beats: [
         B('what-is', 'What is', ['hook', 'setup'], 0.08, 2, true, 1, 1, 'What does their world honestly look like today?',
-          'Your best people spend 40% of the week copy-pasting.', ['cold-open', 'big-number', 'statement']),
+          'Most cafés here serve bread baked two days ago.', ['cold-open', 'big-number', 'statement']),
         B('could-be', 'What could be', ['turn'], 0.10, 4, true, 1, 1, 'What could it be instead?',
-          'What if that 40% went back to customers?', ['sunrise', 'statement']),
+          'What if it came out of the oven an hour before you open?', ['sunrise', 'statement']),
         B('contrast', 'Contrast', ['proof'], 0.50, 3, true, 2, 4, "What's true now, and what's possible?",
-          'Today: 3 days to quote. Tomorrow: 3 minutes.', ['big-number', 'quote', 'three-points', 'statement']),
+          'Today: bread from 40 miles away. Tomorrow: from down the street.', ['big-number', 'quote', 'three-points', 'statement']),
         B('call-to-action', 'Call to action', ['turn', 'cta'], 0.15, 5, true, 1, 1, 'What must they do, or give up?',
-          'Pick one workflow. Augment it in 30 days.', ['pivot', 'statement']),
+          'Try one week of morning deliveries.', ['pivot', 'statement']),
         B('new-bliss', 'New bliss', ['resolution', 'callback'], 0.17, 4, true, 1, 1, 'What does their world look like after they act?',
-          'Work that feels human again.', ['finale', 'sunrise', 'image'])
+          'Warm bread on every table by 7am.', ['finale', 'sunrise', 'image'])
       ] },
 
     { id: 'psf', name: 'Problem, solution, future', turns: 1,
       bestFor: 'launches and proposals',
       beats: [
         B('hook', 'Hook', ['hook'], 0.08, 3, true, 1, 1, 'Which image or number makes the pain visible?',
-          '11 tabs. 4 logins. 1 customer waiting.', ['cold-open', 'big-number', 'image']),
+          '3 missed calls before 9am. 3 lost jobs.', ['cold-open', 'big-number', 'image']),
         B('problem', 'Problem', ['tension'], 0.20, 3, true, 1, 2, 'Who hurts, how much, and what does it cost?',
-          'Every hand-off loses a day.', ['statement', 'big-number', 'the-box']),
+          'Every missed call is a customer who rings someone else.', ['statement', 'big-number', 'the-box']),
         B('insight', 'Insight', ['turn'], 0.12, 4, true, 1, 1, 'What do you see that others miss?',
-          "It's not the people. It's the seams.", ['pivot', 'statement']),
+          "It's not the price. It's the wait.", ['pivot', 'statement']),
         B('solution', 'Solution', ['idea'], 0.20, 5, true, 1, 2, 'Name your answer in three words.',
-          'Meet Relay.', ['brand-reveal', 'logo', 'image']),
+          'Book in 60 seconds.', ['brand-reveal', 'logo', 'image']),
         B('proof', 'Proof', ['proof'], 0.20, 3, true, 1, 3, "What's your evidence: a demo, a case, a number?",
-          'Pilot: 62% fewer hand-offs.', ['big-number', 'quote', 'three-points']),
+          'First month: 41 jobs booked online.', ['big-number', 'quote', 'three-points']),
         B('future', 'Future', ['resolution'], 0.12, 4, false, 0, 1, 'What becomes possible next?',
-          'Every team, with a co-pilot.', ['sunrise', 'statement', 'image']),
+          'Every customer booked the same day.', ['sunrise', 'statement', 'image']),
         B('ask', 'Ask', ['cta'], 0.08, 4, true, 1, 1, 'Exactly what should they do, and by when?',
-          'Start a 30-day pilot.', ['finale', 'statement'])
+          'Start your free month by Friday.', ['finale', 'statement'])
       ] },
 
     { id: 'scqa', name: 'Situation, complication, question, answer', turns: 1,
       bestFor: 'executive briefings',
       beats: [
         B('situation', 'Situation', ['hook', 'setup'], 0.10, 2, true, 1, 1, 'What does everyone in the room already agree on?',
-          'AI is now in every tool we buy.', ['statement', 'big-number']),
+          'Weekday trade is steady and loyal.', ['statement', 'big-number']),
         B('complication', 'Complication', ['tension'], 0.15, 3, true, 1, 1, 'What changed, or what broke?',
-          'Adoption has stalled at 12%.', ['big-number', 'the-box', 'statement']),
+          'Saturday takings are down 18% since spring.', ['big-number', 'the-box', 'statement']),
         B('question', 'Question', ['setup'], 0.05, 3, false, 0, 1, 'What question does that raise?',
-          'So how do we get value, not just licences?', ['statement']),
+          'So how do we win Saturdays back?', ['statement']),
         B('answer', 'Answer', ['turn', 'idea'], 0.15, 5, true, 1, 1, "What's your answer in one sentence?",
-          'Augment roles, not tasks.', ['pivot', 'statement']),
+          'Late Fridays, not early Saturdays.', ['pivot', 'statement']),
         B('support', 'Support', ['proof'], 0.40, 3, true, 1, 3, 'What are your three supporting points?',
-          '1 · Redesign the role first', ['three-points', 'big-number', 'quote']),
+          '1 · Friday evening is when locals go out', ['three-points', 'big-number', 'quote']),
         B('ask', 'Ask', ['cta'], 0.15, 4, true, 1, 1, 'What decision do you need, from whom, by when?',
-          'Approve a two-team pilot by 1 Nov.', ['finale', 'statement'])
+          'Approve a three-month Friday trial by the 1st.', ['finale', 'statement'])
       ] },
 
     { id: 'blank', name: 'Blank', turns: null, bestFor: 'building the arc yourself', beats: [] }
@@ -131,20 +146,53 @@ PD.module('story/frameworks', ['story/copy'], function (PD, copy) {
     { goal: ['inspire', 'persuade'], recommend: 'sparkline', runnerUp: 'giant-leap' },
     { recommend: 'sparkline', runnerUp: 'giant-leap' }
   ];
+  /* ---------------------------------------------------------- the smallest board (§6.5 steps 1-2, with the proofs) */
+  function proofCount(story) {
+    var rows = story && Array.isArray(story.proof) ? story.proof : [];
+    return rows.filter(function (p) {
+      return p && ((typeof p.text === 'string' && p.text.trim()) || (p.value !== '' && p.value != null && isFinite(+p.value)));
+    }).slice(0, 3).length;
+  }
+  function baseCounts(fw, story) {
+    var out = {}, left = proofCount(story);
+    ((fw && fw.beats) || []).forEach(function (b) {
+      var base = b.required ? Math.max(1, b.min) : b.min;
+      if (b.roles.indexOf('proof') >= 0 && left > 0) { base = Math.max(base, Math.min(b.max, left)); left -= base; }
+      out[b.id] = base;
+    });
+    return out;
+  }
+  function minScenes(fw, story) {
+    var c = baseCounts(fw, story), n = 0;
+    for (var k in c) if (Object.prototype.hasOwnProperty.call(c, k)) n += c[k];
+    return n;
+  }
+  function slotScenes(story) {
+    var t = story && story.targetMin;
+    return t == null || t === '' || !isFinite(+t) || +t <= 0 ? null : Math.round(+t * 60 / 50);
+  }
+
   function recommend(story) {
-    var goal = story && story.goal || null, tone = story && story.tone || null;
-    for (var i = 0; i < RECOMMEND.length; i++) {
+    var goal = story && story.goal || null, tone = story && story.tone || null, out = null;
+    for (var i = 0; i < RECOMMEND.length && !out; i++) {
       var r = RECOMMEND[i];
       if (r.goal && r.goal.indexOf(goal) < 0) continue;
       if (r.tone && r.tone.indexOf(tone) < 0) continue;
-      return { id: r.recommend, runnerUp: r.runnerUp, row: r };
+      out = { id: r.recommend, runnerUp: r.runnerUp, row: r };
     }
-    return { id: 'sparkline', runnerUp: 'giant-leap', row: RECOMMEND[RECOMMEND.length - 1] };
+    if (!out) out = { id: 'sparkline', runnerUp: 'giant-leap', row: RECOMMEND[RECOMMEND.length - 1] };
+    var want = slotScenes(story), a = framework(out.id), b = framework(out.runnerUp);
+    if (want != null && a && b) {
+      var ma = minScenes(a, story), mb = minScenes(b, story);
+      if (ma > want && mb < ma) out = { id: out.runnerUp, runnerUp: out.id, row: out.row, slot: true };
+    }
+    return out;
   }
   function pickText(story, id) {
-    var fw = framework(id || recommend(story).id);
+    var rec = recommend(story), fw = framework(id || rec.id);
     if (!fw) return '';
     var t = story && story.targetMin;
+    if (rec.slot && fw.id === rec.id && framework(rec.runnerUp)) return copy.say('fw.pick.slot', { other: framework(rec.runnerUp).name, targetMin: t, framework: fw.name });
     return copy.say(story && story.goal && t ? 'fw.pick' : 'fw.pick.open', {
       goal: story && story.goal, targetMin: t, framework: fw.name, bestFor: fw.bestFor
     });
@@ -176,6 +224,7 @@ PD.module('story/frameworks', ['story/copy'], function (PD, copy) {
   var api = {
     ROLES: ROLES, frameworks: frameworks, framework: framework, beatIndex: beatIndex,
     RECOMMEND: RECOMMEND, recommend: recommend, pickText: pickText, defaultTheme: defaultTheme,
+    proofCount: proofCount, baseCounts: baseCounts, minScenes: minScenes,
     energyCurve: energyCurve, idealEnergy: idealEnergy
   };
   for (var k in api) S[k] = api[k];

@@ -56,6 +56,46 @@ T.test('wp6 store: same-label commits within a second are one undo step, other l
   store.redo(); a.equal(store.get().deck.scenes[0].notes, 'n'); a.equal(store.canRedo(), false);
 }));
 
+T.test('wp6 store: a discrete action (merge: false) and a change to the scene list are each their own undo step', wp6With(function (a, store) {
+  ['Name A', 'Name B', 'Name C'].forEach(function (t) { store.commit('Rename', function (d) { d.deck.meta.title = t; }, { merge: false }); });
+  store.undo();
+  a.equal(store.get().deck.meta.title, 'Name B', 'three quick renames are three steps: one undo goes back to the second name');
+  store.undo(); a.equal(store.get().deck.meta.title, 'Name A');
+  store.commit('Rename', function (d) { d.deck.meta.title = 'Typed'; });
+  store.undo();
+  a.equal(store.get().deck.meta.title, 'Name A', 'a commit right after a discrete one does not merge into it');
+  store.commit('Add scene', function (d) { d.deck.scenes.push({ id: 'd', template: 'statement', props: { line: 'D' } }); });
+  store.commit('Add scene', function (d) { d.deck.scenes.push({ id: 'e', template: 'statement', props: { line: 'E' } }); });
+  store.undo();
+  a.deepEqual(store.get().deck.scenes.map(function (s) { return s.id; }), ['a', 'b', 'c', 'd'], 'two quick adds are two steps');
+  for (var i = 0; i < 5; i++) store.commit('Type', function (d) { d.deck.scenes[0].props.line = 'typing ' + i; });
+  store.undo();
+  a.equal(store.get().deck.scenes[0].props.line, 'First scene', 'typing in one field is still one step');
+}));
+
+T.test('wp6 store: the same file added twice is one asset, named again rather than stored again', function (a) {
+  return wp6Studio().then(function (S) {
+    var proj = wp6Project(), store = S.store, file;
+    store.open(proj);
+    return wp6Canvas(120, 80, 'Logo Mark.png', 'image/png').then(function (f) { file = f; return store.addFiles([f, f]); }).then(function (r) {
+      a.deepEqual(r.added.map(function (x) { return x.id; }), ['logo-mark'], 'twice in one drop: added once');
+      a.deepEqual(r.existing.map(function (x) { return x.id; }), ['logo-mark'], 'and the second is named as the one already there');
+      a.ok(r.warnings.some(function (w) { return w.kind === 'duplicate' && w.id === 'logo-mark'; }), 'with a duplicate warning');
+      return store.addFiles([file]);
+    }).then(function (r) {
+      a.deepEqual(r.added, [], 'a later drop of the same file adds nothing');
+      a.deepEqual(r.existing.map(function (x) { return x.id; }), ['logo-mark']);
+      a.deepEqual(Object.keys(store.get().assets), ['logo-mark'], 'the deck holds it once');
+      store.undo();
+      a.deepEqual(store.get().assets, {}, 'one undo takes the one asset out');
+      return store.addFiles([file]);
+    }).then(function (r) {
+      a.deepEqual(r.added.map(function (x) { return x.id; }), ['logo-mark'], 'once it is gone, the same file is added again under its own name');
+      store.close();
+    }, function (e) { store.close(); throw e; });
+  });
+});
+
 T.test('wp6 store: undo keeps 100 steps, and a new commit drops the redo road', wp6With(function (a, store) {
   for (var i = 0; i < 130; i++) store.commit('Step ' + i, function (d) { d.deck.meta.subtitle = 's' + i; });
   var n = 0; while (store.canUndo() && n < 200) { store.undo(); n++; }

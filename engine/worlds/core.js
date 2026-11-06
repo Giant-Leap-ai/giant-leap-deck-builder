@@ -4,6 +4,12 @@
  * applied by the stage around the camera passes; flashV, blackA, the field and the layers belong to the stage. */
 PD.module('worlds/core', ['core/util', 'core/fx'], function (PD, util, fx) {
   var DW = util.DW, DH = util.DH, U = util.U, FX = fx.FX;
+  function nameOf(L) {             // how a failing layer is named in Stage.fault's message
+    var sp = L && L.spec, str = L && typeof L.str === 'string' ? L.str : null;
+    if (sp && sp.id != null) return 'element "' + sp.id + '"';
+    if (str != null) return 'the text "' + (str.length > 40 ? str.slice(0, 40) + '…' : str) + '"';
+    return 'an element';
+  }
 
   var plugin = PD.world('core', {
     params: { roll: 0, shake: 0, letterbox: 0, exposure: 1, vignette: 0.6, grain: 0.05, particles: 1 },
@@ -15,8 +21,15 @@ PD.module('worlds/core', ['core/util', 'core/fx'], function (PD, util, fx) {
         field.draw(ctx, f.T);
       } },
       { z: 100, space: 'screen', name: 'elements', draw: function (ctx, W, st, f) {
-        var layers = f.stage.layers, T = f.T, S = f.S;
-        for (var i = 0; i < layers.length; i++) layers[i].draw(ctx, T, S);
+        var s = f.stage, layers = s.layers, T = f.T, S = f.S, faulted = s.faultedLayers, bad;
+        for (var i = 0; i < layers.length; i++) {
+          var L = layers[i];
+          // an element (or its reveal or exit) that throws must not take the other layers and the post passes with it
+          // (Stage.fault): after its first failure it is drawn guarded
+          if (!faulted.has(L)) {
+            try { L.draw(ctx, T, S); } catch (e) { faulted.add(L); s.firstFault(nameOf(L), e, false); }
+          } else if ((bad = s.guarded(L.draw, L, T, S))) s.fault(nameOf(L), bad.e);
+        }
       } },
       { z: 110, space: 'post', name: 'flash', draw: function (ctx, W, st, f) {
         var s = f.stage;

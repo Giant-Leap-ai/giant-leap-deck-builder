@@ -14,7 +14,7 @@ Every deck is plain HTML, Canvas2D and JavaScript. There's no build step, no ins
 | `decks/one-giant-leap/index.html` | Our Tech Week talk: a spark, hyperspace, a galaxy, Earth, a sunrise and a story of human leaps |
 | `decks/one-giant-leap/export/one-giant-leap.html` | The same talk as **one self-contained file** you can email or put on a USB stick |
 | `studio/index.html` | **PixelDeck Studio**, a guided, no-code deck builder: Brief → Shape → Look → Storyboard → Rehearse → Export |
-| `decks/_gallery/index.html` | A tour of every element and effect the engine offers |
+| `decks/_gallery/index.html` | A tour of every element, in the Slate look |
 | `decks/_starter/` | The smallest working deck. Copy it to start your own by hand (or with Claude) |
 
 ## Presenting
@@ -38,6 +38,7 @@ Use Chrome for the smoothest playback. Safari and Firefox work too.
 - **No code:** open `studio/index.html` and follow the steps. Its export gives you a single `.html` file, or the source files for a deck folder.
 - **With Claude Code or Codex:** open this folder in it and say *"Help me make a deck for my business."* The instructions in `CLAUDE.md` / `AGENTS.md` turn it into a guide that knows this project.
 - **By hand:** `cp -R decks/_starter decks/my-talk`, then edit `decks/my-talk/deck.js`. The look (fonts, colors, motion) lives in `themes/` or in a deck's own `theme.js`.
+- **Reference guides** in `docs/`: [writing a deck](docs/authoring.md), [the 16 templates](docs/templates.md), [looks](docs/themes.md), [the Studio](docs/studio.md), [one-file export](docs/export.md), [story tools](docs/story.md) and [plugins](docs/plugins.md).
 
 ## Folder map
 
@@ -48,7 +49,7 @@ engine/             the engine: core renderer and player, worlds (space, planet,
 studio/             the Studio app
 themes/             shared looks: cosmos, slate
 tools/              optional Node tooling: one-file export, video recorder, tests (see below)
-docs/               the build spec and design notes we wrote with Claude while building v2
+docs/               reference guides, plus the build spec and design notes we wrote with Claude while building v2
 cinema/  legacy/  _archive    historical versions of the talk, kept for reference and regression tests
 ```
 
@@ -63,7 +64,7 @@ node record.js --deck one-giant-leap   # MP4 backup of a talk (needs ffmpeg)
 npm test                               # unit tests
 ```
 
-Visual-regression baselines (about 330 MB of screenshots) aren't included. Generate them on your own machine before running the comparison tools; see `tools/regression/README.md`.
+Visual-regression baselines (about 330 MB of screenshots) aren't included. Generate them on your own machine before running the comparison tools; see "For maintainers" in [docs/export.md](docs/export.md#for-maintainers-the-regression-baselines).
 
 ## License
 

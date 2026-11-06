@@ -102,6 +102,19 @@
     // the shell's colours win when it gives them
     var col = f.describeScenes(c, null, { beatColor: function () { return '#123456'; } });
     a.equal(col[0].color, '#123456');
+    // with no function given, the shell's role colours (PD.studio.beatColor, as on Shape's chips) colour the cards, the
+    // Move-to-beat menu and Rehearse alike; with no shell, the palette by index
+    var made = !PD.studio; if (made) PD.studio = {};
+    var S0 = PD.studio, had = Object.prototype.hasOwnProperty.call(S0, 'beatColor'), was = S0.beatColor;
+    try {
+      S0.beatColor = function (b) { return b && b.id === 'spark' ? '#abcdef' : '#fedcba'; };
+      a.equal(f.describeScenes(c, null, {})[0].color, '#abcdef', 'the shell colours the cards');
+      a.equal(f.colorOfBeat(inf[0].beat, 0), '#abcdef', 'and the same call colours the menus and Rehearse');
+      a.equal(f.colorOfBeat(inf[0].beat, 0, function () { return '#123456'; }), '#123456', 'a given function wins');
+      delete S0.beatColor;
+      a.equal(f.colorOfBeat(inf[0].beat, 0), f.beatColor(0), 'no shell: the palette by index');
+      a.equal(f.colorOfBeat(null, -1), f.NEUTRAL, 'no beat: neutral');
+    } finally { if (had) S0.beatColor = was; else delete S0.beatColor; if (made) delete PD.studio; }
   });
 
   T.test('wp7: the painted textarea marks [placeholders] and the ▸ prompt lines, and nothing else', async function (a) {
@@ -135,6 +148,28 @@
         keys.forEach(function (k) { a.ok(form.fields[k].el.nodeType === 1, id + '.' + k); });
       });
     });
+  });
+
+  // "Write scene 2" on a statement (an empty optional kicker above a {your line}) lands on the line, with the prompt selected, so
+  // typing replaces it; a form with no placeholder left focuses its first field as before; a prompt inside a list item is found too
+  T.test('wp7: focusFirst goes to the first field that still holds a {placeholder}, with it selected', async function (a) {
+    await load();
+    var f = F(), host = document.createElement('div');
+    document.body.appendChild(host);
+    try {
+      var c = PD.compile({ format: 2, id: 'wp7-focus', meta: { title: 't', theme: 'slate' }, scenes: [] });
+      var api = { theme: c.theme, tokens: {}, assets: function () { return []; }, measure: function () { return { lines: 1, w: 10 }; }, onChange: function () { } };
+      var mk = function (id, values) { host.textContent = ''; var fm = f.buildForm({ schema: PD.template.get(id).props, values: values, skip: [], api: api }); host.appendChild(fm.el); fm.focusFirst(); return document.activeElement; };
+      var el = mk('statement', { line: '{your line}' });
+      a.equal(el && el.closest('.pdx-field').dataset.prop, 'line', 'the line, not the empty kicker above it');
+      a.deepEqual([el.selectionStart, el.selectionEnd], [0, 11], 'the prompt is selected');
+      el = mk('statement', { kicker: 'Hello', line: 'Written' });
+      a.equal(el && el.closest('.pdx-field').dataset.prop, 'kicker', 'nothing left to write: the first field');
+      el = mk('three-points', { items: [{ title: 'One' }, { title: '{point}' }, { title: 'Three' }] });
+      a.equal(el && el.value, '{point}', 'a prompt in the second item of a list');
+      el = mk('pivot', { kicker: 'The turn', from: 'Not {oldWay}.', to: 'Yes.' });
+      a.equal(el.value.slice(el.selectionStart, el.selectionEnd), '{oldWay}', 'a token inside a line is selected on its own');
+    } finally { host.remove(); }
   });
 
   T.test('wp7: a text field counts, measures and flags too-wide lines with the real glyph widths', async function (a) {

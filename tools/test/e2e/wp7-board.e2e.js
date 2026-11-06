@@ -12,7 +12,8 @@
  *   6 Show me selects the scene and step; Ignore suppresses the finding
  *   7 the read-only One Giant Leap sample: 10 locked cards, Director score at least 90
  *   8 Rehearse goes full screen; clicker keys advance, N toggles the strip, Esc returns with the selection kept
- *   9 200 edits in a row: heap growth under 50 MB and the preview keeps its frame rate
+ *   9 200 edits in a row: heap growth under 50 MB and the preview keeps its frame rate (the spec's 60 fps on a 60 Hz host; when
+ *     the browser itself draws every page at 30 Hz, as Chromium's Energy Saver does on a low battery, the frame bars follow it)
  * plus the walk-through (guide, coach, placeholders), assets, and the persistence of edits. */
 'use strict';
 
@@ -110,6 +111,13 @@ async function dragCard(page, id, toId, before) {
   await page.waitForTimeout(80);
   await page.mouse.up();
 }
+// how fast this browser draws a page with nothing on it: the median gap between animation frames, in ms. No page draws faster
+// than its host, and the host is not always 60 Hz: Chromium's Energy Saver (its default: on battery at 20% or less) caps every
+// page at 30 Hz, a blank one included.
+const hostFrameMs = pg => pg.evaluate(() => new Promise(res => {
+  const gaps = []; let last = performance.now();
+  (function f(t) { gaps.push(t - last); last = t; if (gaps.length < 64) requestAnimationFrame(f); else { const g = gaps.slice(4).sort((a, b) => a - b); res(g[g.length >> 1]); } })(performance.now());
+}));
 
 const TESTS = {
   /* ---------------------------------------------------------------- 1 */
@@ -475,6 +483,7 @@ const TESTS = {
   /* ---------------------------------------------------------------- 9 */
   '9 · 200 edits in a row: heap growth under 50 MB and the preview keeps its frame rate': async (page, ctx) => {
     const A = ctx.assert;
+    const blank0 = await hostFrameMs(page);                     // the page is still blank: the host's own frame rate, before the board
     await boot(page, ctx, '?kind=replica');
     await pick(page, 'sunrise');
     const cdp = await ctx.context.newCDPSession(page);
@@ -493,12 +502,12 @@ const TESTS = {
     // and 200 commits straight through the store, as fast as the board takes them
     await page.evaluate(() => new Promise(res => {
       const st = cur().store; let i = 0;
-      (function go() { st.commit('Edit sunrise line ' + (i % 7), d => { d.deck.scenes.find(s => s.id === 'sunrise').props.line = 'edit number ' + i; }); if (++i < 200) setTimeout(go, 12); else res(); })();
+      (function go() { st.commit('Edit sunrise line ' + (i % 7), d => { d.deck.scenes.find(s => s.id === 'sunrise').props.line = 'edit number ' + i; }); if (++i < 200) setTimeout(go, 12); else { window.__frEnd = window.__fr.length; res(); } })();
     }));
     await page.waitForTimeout(1200);
     // the gaps between animation frames while the edits ran (from the first key to the end of the 200 store commits), then the last 90
     const frames = await page.evaluate(() => {
-      const all = window.__fr.slice(2), edit = all.slice(0, Math.max(0, all.length - 75));      // the last ~1.2 s are the idle wait
+      const all = window.__fr.slice(2), edit = all.slice(0, Math.max(0, window.__frEnd - 2));   // up to the last store commit: then the idle wait
       const stat = (arr) => { const f = arr.slice().sort((a, b) => a - b); return { med: f[f.length >> 1], p90: f[Math.floor(f.length * 0.9)], p99: f[Math.floor(f.length * 0.99)], max: f[f.length - 1], n: f.length, slow: f.filter(x => x > 34).length, long: f.filter(x => x > 100).length }; };
       const tail = stat(window.__fr.slice(-90)), during = stat(edit);
       return { med: tail.med, p90: tail.p90, n: tail.n, during };
@@ -506,15 +515,24 @@ const TESTS = {
     const stats = await page.evaluate(() => cur().preview.stats());
     const h1 = await heap();
     const mb = (h1 - h0) / 1048576;
+    // the host again, on a blank page of its own (the cap can switch on or off during the run). On a 60 Hz host the bars are the
+    // spec's (60 fps on the M2) and k is 1. When the host itself draws at 30 Hz, the frame bars follow it (k = 2, never more): the
+    // preview must still keep the host's rate. The heap bar never moves.
+    const probe = await ctx.newPage(), blank1 = await hostFrameMs(probe);
+    await probe.close();
+    const hostMs = Math.max(blank0, blank1), k = hostMs > 22 ? Math.min(2, hostMs / (1000 / 60)) : 1;
+    ctx.log('host: a blank page draws every ' + blank0.toFixed(1) + ' ms before the board and ' + blank1.toFixed(1) + ' ms after the edits' + (k > 1
+      ? ' (' + (1000 / hostMs).toFixed(0) + ' Hz: Chromium’s Energy Saver caps pages at 30 Hz on battery at 20% or less). The frame bars follow the host (×' + k.toFixed(2) + '); the spec’s 60 fps needs a 60 Hz host: mains power or a battery above 20%.'
+      : ' (60 Hz): the spec’s bars'));
     ctx.log('heap ' + (h0 / 1048576).toFixed(1) + ' -> ' + (h1 / 1048576).toFixed(1) + ' MB (' + mb.toFixed(1) + '), frames median ' + frames.med.toFixed(1) + ' ms, p90 ' + frames.p90.toFixed(1) + ', preview fps ' + stats.fps.toFixed(0));
     A.ok(mb < 50, 'heap grew by ' + mb.toFixed(1) + ' MB');
-    A.ok(stats.fps >= 50, 'the preview runs at ' + stats.fps.toFixed(0) + ' fps');
-    A.ok(frames.p90 < 24, 'frame gaps stay small: p90 ' + frames.p90.toFixed(1) + ' ms');
+    A.ok(stats.fps >= 50 / k, 'the preview runs at ' + stats.fps.toFixed(0) + ' fps (bar ' + (50 / k).toFixed(0) + ')');
+    A.ok(frames.p90 < 24 * k, 'frame gaps stay small: p90 ' + frames.p90.toFixed(1) + ' ms (bar ' + (24 * k).toFixed(0) + ')');
     const d = frames.during;
     ctx.log('during the edits: ' + d.n + ' frames, median ' + d.med.toFixed(1) + ' ms, p99 ' + d.p99.toFixed(1) + ', max ' + d.max.toFixed(1) + ', over 34 ms: ' + d.slow + ', over 100 ms: ' + d.long);
-    A.ok(d.n > 200, 'the frame recorder saw the whole edit run: ' + d.n + ' frames');
-    A.ok(d.med < 20, 'while editing the preview keeps its rhythm: median ' + d.med.toFixed(1) + ' ms');
-    A.ok(d.p99 < 40, 'while editing, 99 of 100 frames are on time: p99 ' + d.p99.toFixed(1) + ' ms');
+    A.ok(d.n > 200 / k, 'the frame recorder saw the whole edit run: ' + d.n + ' frames');
+    A.ok(d.med < 20 * k, 'while editing the preview keeps its rhythm: median ' + d.med.toFixed(1) + ' ms (bar ' + (20 * k).toFixed(0) + ')');
+    A.ok(d.p99 < 40 * k, 'while editing, 99 of 100 frames are on time: p99 ' + d.p99.toFixed(1) + ' ms (bar ' + (40 * k).toFixed(0) + ')');
     A.ok(d.long === 0, 'while editing, no frame takes longer than 100 ms: max ' + d.max.toFixed(1) + ' ms');
     const sizes = await page.evaluate(() => { const st = cur().preview.stage; return { layers: st.layerBySpec.size, shapes: st.shapeBySpec.size, scenes: st.deck.scenes.length }; });
     A.ok(sizes.layers < 80, 'the stage keeps only what the deck can show: ' + JSON.stringify(sizes));
@@ -780,6 +798,22 @@ const TESTS = {
     await page.keyboard.press(' ');
     await page.waitForTimeout(200);
     A.equal(await page.evaluate(() => window.__plays), 1, 'one Space, one play');
+  },
+
+  'lifecycle · closing the deck right after the board opens leaves no timer behind to throw': async (page, ctx) => {
+    const A = ctx.assert, errs = [];
+    page.on('pageerror', e => errs.push(String(e && e.message || e)));
+    await boot(page, ctx, '?kind=replica', { noThumbs: true });
+    for (let i = 0; i < 3; i++) {
+      // the board starts a 60 ms timer when it mounts; the project closes (or the board goes) before it fires
+      await page.evaluate(async real => {
+        if (real) { const S = PD.studio, p = S.store.sampleProject('replica'); p.studio.selected = { sceneId: p.deck.scenes[5].id, step: 0 }; await S.openProject(p, { route: 'board' }); S.closeProject(); }
+        else { const st = Studio.stub.last; st.nav('board'); st.nav('rehearse'); }
+      }, ctx.host === 'real');
+      await page.waitForTimeout(250);
+    }
+    A.deepEqual(errs, [], 'no page errors');
+    if (ctx.host === 'real') A.equal(await page.evaluate(() => PD.studio.store.get()), null, 'the deck is closed');
   }
 };
 

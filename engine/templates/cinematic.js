@@ -39,12 +39,61 @@
  * when env.hasParam(key). The ten templates below reproduce the One Giant Leap scenes: expand(example) matches the
  * original scene object for object (decks/_parity checks the rendered frames).
  *
+ * Text the author can make longer than One Giant Leap's is laid out with env.measure / env.fit so it stays readable: a
+ * hero name or escape word within its character limit that would wrap (or leave its space) steps down a size to stay on
+ * one line (past the limit it wraps as styled, for the Director to flag), a long galaxy line wraps in even lines
+ * left of the galaxy, and an automatic milestone position that would print over earlier text moves (timeline). Each of
+ * these leaves a line that already fits exactly as written, so expand(example) is unchanged.
+ *
  * Registration allocates nothing, touches no DOM and draws no random number. */
 PD.module('templates/cinematic', [], function (PD) {
   var ROLE_FUTURE = ['#fff1c9', '#ffb347'], ROLE_PAST = ['#dfe6f2', '#8c9bb6'];   // only used when a theme defines no such role
+  var has = function (o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); };
+  var NAME_MAX = 18, ESCAPE_MAX = 12, BOX_LINE_MAX = 40;                         // character limits of props that are fitted to one line
 
   function str(v) { return v == null ? '' : String(v); }
   function list(v) { return Array.isArray(v) ? v : v == null ? [] : [v]; }
+  function styleOf(env, name) { var s = env.theme && env.theme.styles; return (s && s[name]) || {}; }
+  // the size that keeps `s` on ONE line no wider than maxW (default: the style's own wrap width), or null when the
+  // style's size already does: a line that fits is left exactly as written. Only text within its prop's character limit
+  // (maxChars) steps down; longer text wraps as styled, and the Director asks for it to be shortened (copy.lines,
+  // template.prop-max) instead of it shrinking out of sight.
+  function fitSize(env, s, style, maxW, maxChars) {
+    var st = styleOf(env, style), base = st.size;
+    if (!s || !(base > 0) || (maxChars && s.length > maxChars)) return null;
+    var f = env.fit(s, style, base, maxW || st.maxWidth || 1700);
+    return f < base ? f : null;
+  }
+  // the lines the text element (engine/core/text.js) breaks `s` into at maxW: the same greedy word wrap, measured with
+  // env.measure so a block can be laid out before the stage builds it. memo (per style and size) caches the widths.
+  function wrapAt(env, s, style, size, maxW, memo) {
+    function wide(c) {
+      if (!has(memo, c)) { var m = env.measure(c, style, size); memo[c] = m.lines.length > 1 ? Infinity : m.w; }
+      return memo[c] > maxW;
+    }
+    var lines = [];
+    String(s).split('\n').forEach(function (para) {
+      var words = para.split(' '), line = '';
+      for (var i = 0; i < words.length; i++) {
+        var cand = line ? line + ' ' + words[i] : words[i];
+        if (line && wide(cand)) { lines.push(line); line = words[i]; } else line = cand;
+      }
+      lines.push(line);
+    });
+    return lines;
+  }
+  // even lines: the narrowest wrap width up to maxW that keeps the number of lines `s` needs at maxW, so a wrapped line
+  // does not end on one stray word. → { maxWidth, lines } (maxWidth is maxW when s fits on one line)
+  function balance(env, s, style, size, maxW) {
+    var memo = Object.create(null), at = wrapAt(env, s, style, size, maxW, memo), n = at.length;
+    if (n < 2) return { maxWidth: maxW, lines: n };
+    var total = 0;
+    at.forEach(function (l) { total += env.measure(l, style, size).w; });
+    var lo = Math.max(1, Math.floor(total / n) - 1), hi = Math.ceil(maxW);
+    if (wrapAt(env, s, style, size, lo, memo).length <= n) hi = lo;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (wrapAt(env, s, style, size, mid, memo).length <= n) hi = mid; else lo = mid; }
+    return { maxWidth: Math.min(maxW, hi + 2), lines: n };
+  }
   function role(env, name, fallback) { var r = env.role(name); if (r === undefined) r = fallback; return Array.isArray(r) ? r.slice() : r; }   // always a copy
   function hex2(v) { return ('0' + (v | 0).toString(16)).slice(-2); }
   // a ring of n glow points around (cx, cy); the angle maths is the original's, term for term
@@ -76,8 +125,10 @@ PD.module('templates/cinematic', [], function (PD) {
     expand: function (p, env) {
       var spark = { shape: 'spark', id: 'spark', count: p.sparkCount, radius: 40 };
       if (p.sparkColor && p.sparkColor !== 'gold') spark.color = p.sparkColor;       // gold is the spark's own colour
+      // a look without this shot opens in its DARK shot when it has one (Slate), so the spark is still a spark in the dark
+      var dark = has(env.shots, 'DARK') ? 'DARK' : 'DRIFT';
       return {
-        world: env.W(env.shot(p.shot), { spark: 1 }),
+        world: env.W(env.shot(p.shot, dark), { spark: 1 }),
         worldTime: 3,
         particles: [spark],
         motion: { entry: 'spark', dur: 2.4, spread: 1.8, ease: 'easeOutCubic', arc: 0.8 },
@@ -94,7 +145,7 @@ PD.module('templates/cinematic', [], function (PD) {
     requires: { worlds: [] },
     story: { energy: 4, talkSec: 30, stepTalkSec: 0, roles: ['identity', 'idea', 'callback'], hook: false },
     props: {
-      title: { type: 'text', label: 'Name', required: true, max: 18, style: 'hero' },
+      title: { type: 'text', label: 'Name', required: true, max: NAME_MAX, style: 'hero' },
       subtitle: { type: 'text', label: 'Tagline', max: 40, style: 'subtitle', default: 'Making work more human' },
       subtitleAt: { type: 'number', label: 'Tagline appears after (s)', min: 0, max: 6, step: 0.1, default: 2.6 },
       flash: { type: 'number', label: 'Flash', min: 0, max: 1, step: 0.01, default: 0.32 },
@@ -112,6 +163,8 @@ PD.module('templates/cinematic', [], function (PD) {
         text: [{ id: 'brand', str: str(p.title), style: 'hero', y: 470, reveal: 'particles' }],
         dwell: 6
       };
+      var hs = fitSize(env, str(p.title), 'hero', 0, NAME_MAX);                  // a name that would wrap into the tagline stays on one line
+      if (hs) sc.text[0].size = hs;
       if (env.hasParam('spark')) sc.timing = { spark: [0.6, 'outQuad'] };       // the cold-open spark fades as the brand blooms
       if (p.flash > 0) sc.cues = [{ at: 0.35, flash: p.flash }];
       if (str(p.subtitle)) sc.text.push({ str: str(p.subtitle), style: 'subtitle', y: 610, reveal: 'letters', at: p.subtitleAt });
@@ -182,7 +235,15 @@ PD.module('templates/cinematic', [], function (PD) {
         dwell: 5
       };
       if (str(p.kicker)) sc.text.push({ str: str(p.kicker), style: 'kicker', x: 220, y: 430, align: 'left', at: 1.8 });
-      sc.text.push({ str: str(p.line), style: 'statement', x: 220, y: 500, align: 'left', at: 2.4, reveal: 'letters' });
+      // a line too wide for the space left of the galaxy's core (x 220 to 1120) wraps there in even lines, and the block
+      // grows downwards from where one line's top would be, away from the kicker
+      var line = { str: str(p.line), style: 'statement', x: 220, y: 500, align: 'left', at: 2.4, reveal: 'letters' };
+      var b = balance(env, line.str, 'statement', null, 900);
+      if (b.lines > 1) {
+        var st = styleOf(env, 'statement'), sz = st.size || 64;
+        line.maxWidth = b.maxWidth; line.y = 500 + (b.lines - 1) * sz * (st.lineHeight || 1.12) / 2;
+      }
+      sc.text.push(line);
       if (str(p.marker)) {
         sc.steps = [{
           world: { earth: 1 }, timing: { earth: [1.5, 'inOutQuad'] },
@@ -300,24 +361,62 @@ PD.module('templates/cinematic', [], function (PD) {
         pts.push({ x: c.x, y: c.y, s: 22, color: '#ffffff' });
         return pts;
       }
+      var us = ms.map(function (m, i) {
+        return typeof m.u === 'number' && isFinite(m.u) ? Math.min(1, Math.max(0, m.u)) : (n > 1 ? 0.04 + i * 0.935 / (n - 1) : 0.5);
+      });
+      /* Text positions. An explicit pos is used as given. 'auto' takes the spec's rule (u < .12 above, u < .5 below, else
+       * left), unless that would print over text already on screen (the kicker, the title, an earlier milestone): many
+       * milestones crowd the flat start of the curve. Then the text goes to the other side of the curve, or is lifted
+       * (left of a steep node, above a flat one) by the least amount that clears that text, the curve, the nodes and the
+       * frame. When nothing clears, the rule's position stays. One Giant Leap's seven never collide, so they don't move. */
+      var PAD = 4, taken = [], nodes = us.map(curveXY);
+      function box(x, y, w, h, align) { var x0 = align === 'right' ? x - w : align === 'left' ? x : x - w / 2; return { x0: x0, x1: x0 + w, y0: y - h / 2, y1: y + h / 2 }; }
+      function hit(a, b, pad) { return a.x0 < b.x1 + pad && b.x0 < a.x1 + pad && a.y0 < b.y1 + pad && b.y0 < a.y1 + pad; }
+      function blockAt(c, pos, lift, sz) {
+        var tx = c.x, ty, align = 'center';
+        if (pos === 'left') { tx = c.x - 40; ty = c.y - 6; align = 'right'; }
+        else if (pos === 'below') ty = c.y + 74;
+        else ty = c.y - 88;
+        ty -= lift;
+        return { tx: tx, ty: ty, align: align, boxes: [box(tx, ty - 18, sz.wy, sz.hy, align), box(tx, ty + 26, sz.wl, sz.hl, align)] };
+      }
+      function clearOfText(bl) { return bl.boxes.every(function (b) { return taken.every(function (t) { return !hit(b, t, PAD); }); }); }
+      function clearOfAll(bl) {
+        return clearOfText(bl) && bl.boxes.every(function (b) {
+          if (b.x0 < 8 || b.x1 > 1912 || b.y0 < 8 || b.y1 > 1072) return false;
+          if (nodes.some(function (c) { return hit(b, { x0: c.x - 20, x1: c.x + 20, y0: c.y - 20, y1: c.y + 20 }, 0); })) return false;
+          if (!p.curve) return true;
+          for (var k = 0; k <= 420; k += 2) { var q = curveXY(k / 420); if (hit(b, { x0: q.x - 3, x1: q.x + 3, y0: q.y - 3, y1: q.y + 3 }, PAD)) return false; }
+          return true;
+        });
+      }
+      function measured(s, style) { var m = env.measure(s, style); return { w: m.w, h: m.h }; }
+      if (str(p.kicker)) { var km = measured(str(p.kicker), 'kicker'); taken.push(box(160, 150, km.w, km.h, 'left')); }
+      var tm = measured(str(p.title), 'statement'); taken.push(box(160, 215, tm.w, tm.h, 'left'));
       var sc = {
         world: env.shot(p.shot),
         worldTime: 2.5,
         motion: { stagger: 'leftToRight', dur: 1.4, spread: 1.6, ease: 'easeInOutCubic', arc: 0.15, entry: 'void', exit: 'drift' },
         text: [],
         steps: ms.map(function (m, i) {
-          var u = typeof m.u === 'number' && isFinite(m.u) ? Math.min(1, Math.max(0, m.u)) : (n > 1 ? 0.04 + i * 0.935 / (n - 1) : 0.5);
-          var pos = m.pos === 'above' || m.pos === 'below' || m.pos === 'left' ? m.pos : (u < 0.12 ? 'above' : u < 0.5 ? 'below' : 'left');
+          var u = us[i], c = nodes[i], auto = !(m.pos === 'above' || m.pos === 'below' || m.pos === 'left');
+          var pos = auto ? (u < 0.12 ? 'above' : u < 0.5 ? 'below' : 'left') : m.pos;
           var color = m.color || (p.highlightLast && i === n - 1 ? glow : accent);
-          var c = curveXY(u), tx = c.x, ty, align = 'center';
-          if (pos === 'left') { tx = c.x - 40; ty = c.y - 6; align = 'right'; }
-          else if (pos === 'below') ty = c.y + 74;
-          else ty = c.y - 88;
+          var y = measured(str(m.when), 'year'), l = measured(str(m.label), 'label'), sz = { wy: y.w, hy: y.h, wl: l.w, hl: l.h };
+          var bl = blockAt(c, pos, 0, sz);
+          if (auto && !clearOfText(bl)) {
+            var tries = pos === 'below' ? ['above', 'below'] : pos === 'above' ? ['below', 'above'] : ['left'], found = null;
+            for (var lift = 0; lift <= 240 && !found; lift += 4) {
+              for (var t = 0; t < tries.length && !found; t++) { var cand = blockAt(c, tries[t], lift, sz); if (clearOfAll(cand)) found = cand; }
+            }
+            if (found) bl = found;
+          }
+          taken.push(bl.boxes[0], bl.boxes[1]);
           return {
             particles: [{ shape: 'points', points: pointsOf(u, color) }],
             text: [
-              { str: str(m.when), style: 'year', x: tx, y: ty - 18, align: align, reveal: 'rise' },
-              { str: str(m.label), style: 'label', x: tx, y: ty + 26, align: align, reveal: 'rise', at: 0.15 }
+              { str: str(m.when), style: 'year', x: bl.tx, y: bl.ty - 18, align: bl.align, reveal: 'rise' },
+              { str: str(m.label), style: 'label', x: bl.tx, y: bl.ty + 26, align: bl.align, reveal: 'rise', at: 0.15 }
             ]
           };
         }),
@@ -345,8 +444,8 @@ PD.module('templates/cinematic', [], function (PD) {
     story: { energy: 3, talkSec: 45, stepTalkSec: 20, roles: ['tension'], hook: false },
     props: {
       line: { type: 'text', label: 'Line beside the box', required: true, max: 60, style: 'statement' },
-      escape: { type: 'text', label: 'The escape word', required: true, max: 12, style: 'hero' },
-      subtitle: { type: 'text', label: 'Line under the escape word', max: 40, style: 'subtitle', default: 'is where the future lives' },
+      escape: { type: 'text', label: 'The escape word', required: true, max: ESCAPE_MAX, style: 'hero' },
+      subtitle: { type: 'text', label: 'Line under the escape word', max: BOX_LINE_MAX, style: 'subtitle', default: 'is where the future lives' },
       cubeColor: { type: 'color', label: 'Box colour', default: 'cyan' },
       cubeColor2: { type: 'color', label: 'Box colour, far edge', default: 'violet' },
       shot: { type: 'shot', label: 'World', default: 'BOX' }
@@ -357,11 +456,19 @@ PD.module('templates/cinematic', [], function (PD) {
     },
     seed: { line: '{oldWay} was built for a world that is gone.', escape: 'Outside', subtitle: 'is where {newWay} lives' },
     expand: function (p, env) {
+      // the escape word and its line stay in the space right of the box: centred on x 1380, at most 800 wide (x 980 to
+      // 1780); a longer word steps down a size rather than run into the cube or off the frame
       var out = [{
         str: str(p.escape), style: 'hero', x: 1380, y: 500, reveal: 'particles',
         color: role(env, 'future', ROLE_FUTURE), glow: role(env, 'futureGlow', '#ff8a3d')
       }];
-      if (str(p.subtitle)) out.push({ str: str(p.subtitle), style: 'subtitle', x: 1380, y: 610, at: 2.6, color: role(env, 'accent', '#ffd27a') });
+      var es = fitSize(env, out[0].str, 'hero', 800, ESCAPE_MAX);
+      if (es) out[0].size = es;
+      if (str(p.subtitle)) {
+        var sub = { str: str(p.subtitle), style: 'subtitle', x: 1380, y: 610, at: 2.6, color: role(env, 'accent', '#ffd27a') }, ss = fitSize(env, sub.str, 'subtitle', 800, BOX_LINE_MAX);
+        if (ss) sub.size = ss;
+        out.push(sub);
+      }
       return {
         world: env.shot(p.shot),
         worldTime: 2.4,
@@ -427,23 +534,28 @@ PD.module('templates/cinematic', [], function (PD) {
     requires: { worlds: [] },
     story: { energy: 4, talkSec: 30, stepTalkSec: 0, roles: ['callback', 'cta', 'resolution'], hook: false },
     props: {
-      title: { type: 'text', label: 'Name', required: true, max: 18, style: 'hero' },
+      title: { type: 'text', label: 'Name', required: true, max: NAME_MAX, style: 'hero' },
       subtitle: { type: 'text', label: 'Closing line or ask', max: 40, style: 'subtitle', hint: 'Put your ask here', default: 'Thank you' },
       shot: { type: 'shot', label: 'World', default: 'FINALE' }
     },
     example: { title: 'One Giant Leap', subtitle: 'Thank you', shot: 'FINALE' },
     seed: { title: '{brand}', subtitle: '{ask}' },
     expand: function (p, env) {
+      // over a sunrise (One Giant Leap's FINALE shot) the name rides above the sun; with no sun in the shot the name and
+      // the ask are centred like the brand reveal's, instead of leaving the lower half of the frame empty
+      var w = env.shot(p.shot), sun = w.sun > 0;
       var sc = {
-        world: env.shot(p.shot),
+        world: w,
         worldTime: 4,
         prelude: 'explode', preludeTime: 0.8, explodePower: 1.1,
         motion: { stagger: 'radial', ease: 'easeOutCubic', dur: 2.0, spread: 0.9, arc: 0.4, entry: 'void', exit: 'drift' },
-        text: [{ str: str(p.title), style: 'hero', y: 380, reveal: 'particles' }],
+        text: [{ str: str(p.title), style: 'hero', y: sun ? 380 : 470, reveal: 'particles' }],
         dwell: 7
       };
+      var hs = fitSize(env, str(p.title), 'hero', 0, NAME_MAX);                  // a name that would wrap into the ask stays on one line
+      if (hs) sc.text[0].size = hs;
       if (env.hasParam('sun')) sc.timing = { sun: [3, 'inOutQuad', 1], sunY: [5, 'outCubic', 0.5] };
-      if (str(p.subtitle)) sc.text.push({ str: str(p.subtitle), style: 'subtitle', y: 500, at: 2.8 });
+      if (str(p.subtitle)) sc.text.push({ str: str(p.subtitle), style: 'subtitle', y: sun ? 500 : 610, at: 2.8 });
       return sc;
     }
   });

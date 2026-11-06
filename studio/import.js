@@ -22,10 +22,13 @@
  *     MAX_EDGE (2400), BIG_IMAGE (4 MB), BIG_TOTAL (20 MB)
  *   }
  * The module's own exports are the intake the storyboard's assets panel looks for (PD.get('studio/import')):
- *   addFiles(files, { deckId? }) → Promise<{ added: [{ id, hash, kind, asset }], rejected: [{ name, msg, message }], warnings }>
+ *   addFiles(files, { deckId? }) → Promise<{ added: [{ id, hash, kind, asset }], existing: [{ id, hash, kind, asset, existing }],
+ *                                            rejected: [{ name, msg, message }], warnings }>
  *       process each file, store its record in IndexedDB by content hash, remember it for undo and reopen, and register it with
  *       PD.assets.put(deckId, id, source). It does NOT touch the project: the caller commits project.assets[id] = hash
- *       (store.addFiles does both in one step). importFiles is the same function.
+ *       (store.addFiles does both in one step). importFiles is the same function. A file whose content the open deck already
+ *       has (or that came twice in one drop) is not added again: it is listed in `existing` under the id it already has, with
+ *       a warning of kind 'duplicate'.
  * Registration defines functions only: no DOM, no storage. */
 PD.module('studio/import', ['studio/persist', 'core/export', 'story/copy'], function (PD, persist, exportMod, copy) {
   var S = PD.studio;
@@ -216,21 +219,29 @@ PD.module('studio/import', ['studio/persist', 'core/export', 'story/copy'], func
   function addFiles(list, opts) {
     opts = opts || {};
     var st = S.store, p = st && st.get(), deckId = opts.deckId || (p && p.deck.id);
-    var arr = Array.prototype.slice.call(list || []), out = { added: [], rejected: [], warnings: [] };
+    var arr = Array.prototype.slice.call(list || []), out = { added: [], existing: [], rejected: [], warnings: [] };
     if (!deckId) {
       out.rejected = arr.map(function (f) { return { name: f.name, msg: 'Open or start a deck first.', message: 'Open or start a deck first.' }; });
       return Promise.resolve(out);
     }
-    var taken = {}, reg = PD.assets.get(deckId), k;
+    var taken = {}, byHash = {}, reg = PD.assets.get(deckId), k;
     for (k in reg) if (Object.prototype.hasOwnProperty.call(reg, k)) taken[k] = 1;
-    if (p && p.deck.id === deckId) for (k in p.assets) if (Object.prototype.hasOwnProperty.call(p.assets, k)) taken[k] = 1;
+    if (p && p.deck.id === deckId) for (k in p.assets) if (Object.prototype.hasOwnProperty.call(p.assets, k)) { taken[k] = 1; byHash[p.assets[k]] = k; }
     var chain = Promise.resolve();
     arr.forEach(function (file) {
       chain = chain.then(function () {
         return process(file).then(function (res) {
           if (!res.ok) { out.rejected.push({ name: file.name, msg: res.message, message: res.message }); return null; }
           return persist.sha256(res.asset.src).then(function (hash) {
+            // the same file again (same content): the deck already has it, so it is named, not stored a second time
+            var have = Object.prototype.hasOwnProperty.call(byHash, hash) ? byHash[hash] : null, live = PD.assets.get(deckId);
+            if (have != null && live[have]) {
+              out.existing.push({ id: have, hash: hash, kind: res.kind, asset: live[have], existing: true });
+              out.warnings.push({ kind: 'duplicate', id: have, msg: file.name + ' is already in your deck, as ' + have + '.' });
+              return null;
+            }
             var rec = recordOf(res.asset, hash), id = assetId(file.name, taken);
+            byHash[hash] = id;
             taken[id] = 1;
             if (st && st.cacheRecords) { var m = {}; m[hash] = rec; st.cacheRecords(m); }
             return persist.assets.put(rec).then(function (stored) {

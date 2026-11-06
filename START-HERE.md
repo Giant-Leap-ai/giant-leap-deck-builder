@@ -27,7 +27,7 @@ This folder is set up so **Claude Code** or **Codex** can act as your guide. The
 
 **If you do:**
 ```bash
-cd pixeldeck
+cd pixeldeck  # or this folder's name, e.g. giant-leap-deck-builder from GitHub
 claude        # or: codex
 ```
 

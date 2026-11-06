@@ -2,8 +2,11 @@
  *   node tools/test/e2e.js wp2-export
  * Covers: the CLI (#1, #6), the file itself (#2), the golden gate on it (#1), notes from the exported file (#4), the round
  * trip through a real browser parse (#3), the self-test on good and broken decks (#5), the starter deck (#7).
- * Scratch pages live in ctx.tmp (outside ROOT) and load the engine from ROOT by file:// URL. The only thing written inside
- * ROOT is decks/one-giant-leap/export/one-giant-leap.html (generated, git-ignored), by the first test. */
+ * Scratch pages live in ctx.tmp (outside ROOT) and load the engine from ROOT by file:// URL. Nothing is written inside ROOT:
+ * decks/one-giant-leap/export/one-giant-leap.html is TRACKED (re-included by .gitignore, linked from README.md) and inside
+ * the protected deck folder, so the first test exports a copy of that deck in ctx.tmp with the default --out and checks the
+ * bytes against the tracked file. When the engine changes that check fails until the file is regenerated on purpose with
+ * `node tools/export.js decks/one-giant-leap` (the release gate does this). */
 'use strict';
 const fs = require('fs'), path = require('path'), zlib = require('zlib'), cp = require('child_process'), url = require('url');
 
@@ -112,13 +115,24 @@ function scratch(ctx, name) {
 
 /* ------------------------------------------------------------------ tests */
 module.exports = {
-  'CLI (acceptance #1, #2): node tools/export.js decks/one-giant-leap writes decks/one-giant-leap/export/one-giant-leap.html; under 400 KB; no src/href/fetch; plays from file:// with no network': async (page, ctx) => {
+  'CLI (acceptance #1, #2): node tools/export.js <OGL deck folder> writes <folder>/export/one-giant-leap.html (the tracked file is current); under 400 KB; no src/href/fetch; plays from file:// with no network': async (page, ctx) => {
     const A = ctx.assert;
-    const r = cli(ctx, ['decks/one-giant-leap']);
+    // a copy of the protected deck folder in ctx.tmp (engine paths pointed back at ROOT), so the default --out lands outside ROOT
+    const copy = path.join(ctx.tmp, 'ogl-copy', 'one-giant-leap');
+    fs.mkdirSync(copy, { recursive: true });
+    fs.writeFileSync(path.join(copy, 'index.html'), fs.readFileSync(ctx.path(OGL_PAGE), 'utf8').replace(/\.\.\/\.\.\//g, fileUrl(ctx.root) + '/'));
+    for (const f of ['theme.js', 'assets.js', 'deck.js']) fs.copyFileSync(ctx.path('decks', 'one-giant-leap', f), path.join(copy, f));
+    const before = fs.statSync(ctx.path(OGL_EXPORT)).mtimeMs;
+    const r = cli(ctx, [copy]);
     A.equal(r.status, 0, 'exit ' + r.status + '\n' + r.stdout + r.stderr);
-    A.ok(/^wrote decks\/one-giant-leap\/export\/one-giant-leap\.html \(\d+ bytes, deck "one-giant-leap"\)$/m.test(r.stdout), r.stdout);
-    const file = ctx.path(OGL_EXPORT), html = fs.readFileSync(file, 'utf8');
+    const file = path.join(copy, 'export', 'one-giant-leap.html');
+    A.ok(r.stdout.split('\n').indexOf('wrote ' + file + ' (' + (fs.existsSync(file) ? fs.statSync(file).size : -1) + ' bytes, deck "one-giant-leap")') >= 0,
+      'the default --out is <folder>/export/<deck id>.html:\n' + r.stdout);
+    A.equal(fs.statSync(ctx.path(OGL_EXPORT)).mtimeMs, before, 'the tracked export in the protected deck folder is not written');
+    const html = fs.readFileSync(file, 'utf8');
     ctx.log('exported OGL: ' + Buffer.byteLength(html) + ' bytes');
+    A.ok(html === fs.readFileSync(ctx.path(OGL_EXPORT), 'utf8'),
+      OGL_EXPORT + ' is stale: it differs from a fresh export (regenerate it on purpose with `node tools/export.js decks/one-giant-leap`)');
     A.ok(Buffer.byteLength(html) < 400 * 1024, 'under 400 KB');
     A.ok(html.indexOf('fetch(') < 0, 'no fetch(');
     A.ok(!/\b(src|href)\s*=/i.test(html.replace(/<script>[\s\S]*?<\/script>/g, '')), 'no src= or href= outside the script bodies');

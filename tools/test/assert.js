@@ -1,6 +1,6 @@
 /* tools/test/assert.js — test registry + assertions for the pixeldeck unit-test harness (WP0, spec §9).
  *
- * Browser (loaded by tools/test/.harness.html after the engine and decks, before specs/*.test.js):
+ * Browser (loaded by the tools/test/.harness-<pid>.html that run.js writes, after the engine and decks, before specs/*.test.js):
  *   T.test(name, fn(a) → void|Promise, opts?: { timeout: ms }; the default timeout is 10000 ms)
  *   T.skip(name, fn)                       registered but not run (reported as "# SKIP")
  *   a.ok(v, msg?)  a.equal(x, y, msg?)  a.deepEqual(x, y, msg?)  a.throws(fn, re?, msg?)  a.near(x, y, eps?, msg?)

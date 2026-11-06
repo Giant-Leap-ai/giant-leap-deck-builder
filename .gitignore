@@ -5,7 +5,7 @@ tools/node_modules/
 *.mp4
 *.webm
 
-# regression screenshots (~330 MB); regenerate with: cd tools && npm run golden
+# regression screenshots (~330 MB); to regenerate them, see docs/export.md ("For maintainers: the regression baselines")
 tools/regression/baselines/
 tools/regression/baseline-one-giant-leap/
 tools/regression/out/

@@ -40,6 +40,8 @@ PD.module('studio/ui/preview', [], function (PD) {
     '@keyframes pv-pulse { to { box-shadow: 0 0 0 9px transparent; } }',
     '.pv-empty { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; color: var(--pdx-muted); background: radial-gradient(120% 120% at 50% 0%, #1b1f38, #0b0d1a); }',
     '.pv-frame.is-empty .pv-empty { display: grid; }',
+    '.pv-broken { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; color: var(--pdx-muted); background: radial-gradient(120% 120% at 50% 0%, #2a1b2c, #0b0d1a); }',
+    '.pv-frame.is-broken .pv-broken { display: grid; }',
     '.pv-bar { display: flex; align-items: center; gap: 8px; min-height: 40px; flex-wrap: wrap; }',
     '.pv-bar .sp { flex: 1; min-width: 4px; }',
     '.pv { container-type: inline-size; }',
@@ -54,7 +56,10 @@ PD.module('studio/ui/preview', [], function (PD) {
     '.pv-pips button.is-past::before { background: color-mix(in srgb, var(--pdx-accent) 45%, var(--pdx-line)); }',
     '.pv-pips button:focus-visible { outline: 2px solid var(--pdx-accent); outline-offset: -2px; border-radius: 6px; }',
     '.pv-pips .lbl { font: 600 11px var(--pdx-mono); color: var(--pdx-faint); margin-left: 4px; display: none; }',
-    '@container (min-width: 600px) { .pv-pips .lbl { display: inline; } }'
+    '@container (min-width: 600px) { .pv-pips .lbl { display: inline; } }',
+    // a narrow preview (the board at 1440 px) keeps the transport on one row: Click becomes an icon and the pips close up, so a
+    // scene with clicks does not push the Rehearse button onto a line of its own
+    '@container (max-width: 470px) { .pv-nx .lb { display: none; } .pv-nx { padding: 0; width: 34px; justify-content: center; } .pv-pips { padding: 0 2px; } .pv-pips button { width: 18px; } }'
   ].join('\n');
 
   function create(opts) {
@@ -68,11 +73,14 @@ PD.module('studio/ui/preview', [], function (PD) {
     var load = h('div', { class: 'pv-load', text: 'Warming up the stage' });
     var fpsEl = h('div', { class: 'pv-fps' });
     var empty = h('div', { class: 'pv-empty' }, [h('div', null, [h('div', { style: 'font-size:15px;font-weight:600;color:var(--pdx-text);margin-bottom:6px', text: 'Nothing to show yet' }), h('div', { text: 'Add a scene and it plays here.' })])]);
-    var frame = h('div', { class: 'pv-frame' }, [canvas, safe, h('div', { class: 'pv-live' }), fpsEl, load, empty]);
+    // a scene whose settings the stage cannot play (a number far outside its range, from a file or a hand edit) says so here,
+    // instead of leaving the frame on "Warming up the stage" and the board's other panels unpainted
+    var brokenEl = h('div', { class: 'pv-broken', role: 'status' }, [h('div', null, [h('div', { style: 'font-size:15px;font-weight:600;color:var(--pdx-text);margin-bottom:6px', text: 'This scene can\u2019t play as it is' }), h('div', { text: 'One of its settings is out of range. Check the numbers on its Content tab, or undo the last change.' })])]);
+    var frame = h('div', { class: 'pv-frame' }, [canvas, safe, h('div', { class: 'pv-live' }), fpsEl, load, empty, brokenEl]);
 
     var bPlay = h('button', { type: 'button', class: 'pdx-btn is-primary', title: 'Play this scene from the shot before it (Space)', onclick: function () { api.playIn(); } }, [icon('play', 15), h('span', { text: 'Play in' })]);
     var bReplay = h('button', { type: 'button', class: 'pdx-btn is-icon', title: 'Replay: play the current click again', 'aria-label': 'Replay', onclick: function () { api.replayStep(); } }, icon('replay', 16));
-    var bNext = h('button', { type: 'button', class: 'pdx-btn', title: 'Play the next click of this scene', onclick: function () { api.nextClick(); } }, [icon('next', 16), h('span', { text: 'Click' })]);
+    var bNext = h('button', { type: 'button', class: 'pdx-btn pv-nx', title: 'Play the next click of this scene', 'aria-label': 'Next click', onclick: function () { api.nextClick(); } }, [icon('next', 16), h('span', { class: 'lb', text: 'Click' })]);
     var pips = h('div', { class: 'pv-pips', role: 'group', 'aria-label': 'Clicks in this scene' });
     var bSafe = h('button', { type: 'button', class: 'pdx-btn is-icon', title: 'Safe area and text boxes', 'aria-pressed': 'false', onclick: function () { api.safeArea(!safeOn); } }, icon('safe', 18));
     var bRehearse = h('button', { type: 'button', class: 'pdx-btn pv-reh', title: 'Rehearse full screen', 'aria-label': 'Rehearse full screen', onclick: function () { if (opts.onRehearse) opts.onRehearse(); } }, [icon('expand', 16), h('span', { class: 'lb', text: 'Rehearse' })]);
@@ -80,7 +88,17 @@ PD.module('studio/ui/preview', [], function (PD) {
     var root = h('div', { class: 'pdx pv' }, [frame, bar]);
 
     var stage = null, deck = null, dead = false, raf = 0, last = 0, token = 0, safeOn = false, fpsOn = false;
-    var fps = 0, ms = 0, frames = 0, acc = 0, ro = null, building = null, wanted = null, waiters = [];
+    var fps = 0, ms = 0, frames = 0, acc = 0, ro = null, building = null, wanted = null, waiters = [], broken = false;
+    function setBroken(on, err) {
+      if (on && !broken) { try { console.warn('studio: the preview could not play this scene', err); } catch (e) { } }
+      broken = !!on;
+      frame.classList.toggle('is-broken', broken);
+    }
+    // every way into a state goes through here: a scene that throws marks the frame broken, and the next good one clears it
+    function enterSafe(si, st, mode) {
+      try { stage.enter(si, st, mode); setBroken(false); return true; }
+      catch (e) { setBroken(true, e); try { paintPips(); } catch (e2) { } return false; }
+    }
 
     /* ---------------------------------------------------------- the pips (one per state) */
     function steps(si) { return stage && stage.deck.scenes[si] ? stage.stepsOf(si) : 0; }
@@ -154,10 +172,10 @@ PD.module('studio/ui/preview', [], function (PD) {
         resize();
         frame.classList.toggle('is-empty', !n);
         if (n) {
-          stage.setWorld(stage.resolve(si, st).world, null, 0, null, true);
           stage.onEnter = onEnter;
-          stage.enter(si, st, 'settled');
-        } else { stage.onEnter = onEnter; paintPips(); }
+          try { stage.setWorld(stage.resolve(si, st).world, null, 0, null, true); } catch (e) { setBroken(true, e); }
+          enterSafe(si, st, 'settled');
+        } else { stage.onEnter = onEnter; setBroken(false); paintPips(); }
         load.classList.add('is-off');
         startLoop();
       });
@@ -183,8 +201,8 @@ PD.module('studio/ui/preview', [], function (PD) {
       var raw = last ? ts - last : 16.7;
       last = ts;
       var dt = Math.min(0.05, raw / 1000), t0 = performance.now();
-      stage.tick(dt);
-      stage.draw();
+      if (broken) { if (waiters.length) settle(); return; }          // nothing will settle on a scene that cannot play
+      try { stage.tick(dt); stage.draw(); } catch (e) { setBroken(true, e); return; }
       ms = ms * 0.93 + (performance.now() - t0) * 0.07;
       stage.adapt(ms);
       frames++; acc += raw;
@@ -218,24 +236,24 @@ PD.module('studio/ui/preview', [], function (PD) {
         if (evt.at) at = evt.at;
         if (!stage || themeChanged(compiled) || evt.rebuild) { if (!stage && wanted) at = wanted; else wanted = null; building = build(compiled, at); return building; }
         deck = compiled;
-        stage.setDeck(compiled, { changed: evt.changedSceneIds || null });
+        try { stage.setDeck(compiled, { changed: evt.changedSceneIds || null }); } catch (e) { setBroken(true, e); building = build(compiled, at); return building; }
         frame.classList.toggle('is-empty', !compiled.scenes.length);
         if (compiled.scenes.length) {
           var si = Math.max(0, Math.min(at.slide, compiled.scenes.length - 1)), st = Math.max(0, Math.min(at.step, stage.stepsOf(si)));
           var id = compiled.scenes[si].id, same = shown != null && shown === id, edited = (evt.changedSceneIds || []).indexOf(id) >= 0;
           // the scene on stage is untouched by this change: leave it playing; an edit (or a move to another scene) re-enters it settled
           // (spec §7.3 "Field edit"), which morphs the old words into the new ones in a moment; only an explicit evt.instant snaps
-          if (!(same && !edited && !evt.structural && !evt.theme && stage.cur.slide === si)) stage.enter(si, st, evt.instant ? 'instant' : 'settled');
+          if (!(same && !edited && !evt.structural && !evt.theme && stage.cur.slide === si && !broken)) enterSafe(si, st, evt.instant ? 'instant' : 'settled');
           else paintPips();
-        } else { stage.still(0, 0); paintPips(); }          // no scene left: still() resets layers and particles, and enters nothing
+        } else { try { stage.still(0, 0); } catch (e) { } setBroken(false); paintPips(); }          // no scene left: still() resets layers and particles, and enters nothing
         return Promise.resolve();
       },
       show: function (si, step, mode) {
         if (!stage) { wanted = { slide: si, step: step }; return; }
         if (!deck || !deck.scenes.length) return;
         si = Math.max(0, Math.min(si, deck.scenes.length - 1)); step = Math.max(0, Math.min(step || 0, stage.stepsOf(si)));
-        if (mode === 'live') { stage.finishAll(); stage.enter(si, step, 'live'); return; }
-        stage.enter(si, step, mode || 'settled');
+        if (mode === 'live') { try { stage.finishAll(); } catch (e) { } enterSafe(si, step, 'live'); return; }
+        enterSafe(si, step, mode || 'settled');
       },
       showId: function (id, step, mode) {          // a scene by id: safe while the deck is about to change under the selection
         if (!stage) { wanted = { slide: 0, step: step || 0, id: id }; return; }
@@ -247,26 +265,26 @@ PD.module('studio/ui/preview', [], function (PD) {
         if (!stage || !deck || !deck.scenes.length) return;
         si = si == null ? stage.cur.slide : si;
         if (si < 0) si = 0;
-        stage.finishAll();
-        if (si > 0) stage.enter(si - 1, stage.stepsOf(si - 1), 'instant');
-        else blankStage();
-        stage.enter(si, 0, 'live');
+        try { stage.finishAll(); } catch (e) { }
+        if (si > 0) enterSafe(si - 1, stage.stepsOf(si - 1), 'instant');
+        else { try { blankStage(); } catch (e) { } }
+        enterSafe(si, 0, 'live');
         if (opts.onPlayed) opts.onPlayed(si, 0);
       },
       replayStep: function () {
         if (!stage || !deck || !deck.scenes.length) return;
         var si = stage.cur.slide, k = stage.cur.step;                  // stage.cur is one object the stage rewrites on every enter
         if (k === 0) return api.playIn(si);
-        stage.finishAll();
-        stage.enter(si, k - 1, 'instant');
-        stage.enter(si, k, 'live');
+        try { stage.finishAll(); } catch (e) { }
+        enterSafe(si, k - 1, 'instant');
+        enterSafe(si, k, 'live');
       },
       nextClick: function () {
         if (!stage || !deck || !deck.scenes.length) return;
         var si = stage.cur.slide, k = stage.cur.step;
         if (k >= stage.stepsOf(si)) return;
-        stage.finishAll();
-        stage.enter(si, k + 1, 'live');
+        try { stage.finishAll(); } catch (e) { }
+        enterSafe(si, k + 1, 'live');
         if (opts.onPlayed) opts.onPlayed(si, k + 1);
       },
       cur: function () { return stage && stage.cur && stage.cur.slide >= 0 ? { slide: stage.cur.slide, step: stage.cur.step } : null; },
