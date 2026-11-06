@@ -174,8 +174,9 @@ PD.module('core/notes', ['core/sync', 'core/thumbs'], function (PD, sync, thumbs
           want.next = n;
           TB.request(n.slide, n.step, 1);
           paint('next');
-          var ns = DECK[n.slide];
-          $('nextNotes').textContent = (n.step ? 'Step ' + n.step + ' of ' : '') + (n.slide + 1) + ' · ' + (ns.id || '') +
+          var ns = DECK[n.slide], nk = stepsOf(n.slide);
+          // the header's notation: "5 / 10 · step 3/3 · id" is click 3 of the 3 in scene 5 (not "step 3 of 5")
+          $('nextNotes').textContent = (n.slide + 1) + ' / ' + DECK.length + (nk ? ' · step ' + n.step + '/' + nk : '') + ' · ' + (ns.id || '') +
             (n.step && ns.steps[n.step - 1].notes ? ' — ' + ns.steps[n.step - 1].notes : ns.notes ? ' — ' + ns.notes : '');
         } else {
           want.next = null;

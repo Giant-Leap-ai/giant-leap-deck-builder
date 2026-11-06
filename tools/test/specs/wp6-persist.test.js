@@ -121,10 +121,11 @@ T.test('wp6 persist: the tab lock — the first tab holds, a second is told, tak
       return S.persist.lock(id);
     }).then(function (l) {
       second = l; a.equal(l.held, false, 'the second tab does not');
-      second.takeOver();
-      return new Promise(function (r) { setTimeout(r, 120); });
-    }).then(function () {
-      a.equal(lost, 1, 'the first tab learns it lost the project');
+      var t0 = performance.now();
+      return second.takeOver().then(function () { return performance.now() - t0; });
+    }).then(function (ms) {
+      a.equal(lost, 1, 'the first tab learns it lost the project, before the take-over resolves (it saves there)');
+      a.ok(ms < 1000, 'the take-over resolves when the holder answers, not on the 1.5 s fallback (' + Math.round(ms) + ' ms)');
       a.equal(first.held, false); a.equal(second.held, true);
       second.release(); first.release();
       return S.persist.lock(id);

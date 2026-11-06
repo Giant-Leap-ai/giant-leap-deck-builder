@@ -97,7 +97,7 @@ T.test('T.test records the spec file of each test', function (a) {
 
 T.test('harness runs from file:// as a secure context with no network', function (a) {
   a.equal(location.protocol, 'file:');
-  a.ok(/\/tools\/test\/\.harness\.html$/.test(location.pathname), 'generated harness path: ' + location.pathname);
+  a.ok(/\/tools\/test\/\.harness-\d+\.html$/.test(location.pathname), 'generated harness path (one per run): ' + location.pathname);
   a.equal(window.isSecureContext, true);
 });
 

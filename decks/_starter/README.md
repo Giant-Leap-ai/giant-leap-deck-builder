@@ -11,9 +11,11 @@ opens the presenter notes in their own window, `F` shows the frame rate. Nothing
 ## Start your own deck from it
 
 1. Copy this folder: `cp -R decks/_starter decks/my-talk`.
-2. Edit `decks/my-talk/deck.js`. The deck id (`'starter'` today) can be anything in lower-case letters, digits and
-   dashes; use the same id in `assets.js`. `index.html` and `notes.html` call `PD.start()` without an id, so they play
-   whichever single deck the page registers.
+2. Edit `decks/my-talk/deck.js`. Give it a new deck id in place of `'starter'`, in both `PD.deck('starter', …)` and
+   `id: 'starter'` (lower-case letters, digits and dashes), and use the same id in `assets.js`: two decks with one id
+   clash (`docs/authoring.md` explains how). `index.html` and `notes.html` call `PD.start()` without an id, so they play
+   whichever single deck the page registers. Change their `<title>Starter deck</title>` to your talk's name: it is what
+   the browser tab shows.
 3. Pick the look in `index.html` and `notes.html`: the theme script (`../../themes/slate/theme.js`) must be the one named
    by `meta.theme` in `deck.js` (`slate`, `cosmos`, or a `theme.js` of your own in this folder).
 
@@ -21,7 +23,8 @@ opens the presenter notes in their own window, `F` shows the frame rate. Nothing
 
 The Studio's "Export source" gives you a `deck.js` and an `assets.js`. Copy this folder to `decks/<slug>/`, replace
 those two files with the Studio's, and set the theme script in `index.html` and `notes.html` to the look the Studio
-deck uses. That is all; nothing else in the folder names the deck.
+deck uses. Last, change `<title>Starter deck</title>` in both pages to your talk's name; nothing else in the folder
+names the deck.
 
 ## One file to hand around
 

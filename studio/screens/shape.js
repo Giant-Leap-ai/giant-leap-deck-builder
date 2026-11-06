@@ -11,6 +11,12 @@
 PD.module('studio/screens/shape', ['studio/app'], function (PD, app) {
   var S = PD.studio, h = S.h, svg = S.svg, icon = S.icon, IV = PD.story.interview;
 
+  // "an 8-minute slot", "an 11-minute slot", "a 10-minute slot": the article follows how the number is said
+  function article(n) {
+    var d = String(Math.floor(Math.abs(+n) || 0));
+    return d.charAt(0) === '8' || (d.length % 3 === 2 && /^1[18]/.test(d)) ? 'an' : 'a';
+  }
+
   // a smooth path through points (Catmull-Rom converted to cubic Beziers)
   function smooth(pts) {
     if (pts.length < 2) return '';
@@ -91,7 +97,7 @@ PD.module('studio/screens/shape', ['studio/app'], function (PD, app) {
               first ? tag('Recommended', 'rec') : id === rec.runnerUp ? tag('Runner-up') : null,
               h('span', { class: 'pds-fw-check', 'aria-hidden': 'true' }, [icon('check', 14)])
             ]),
-            h('p', { class: 'pds-fw-for' }, ['Best for ' + fw.bestFor + (fw.turns ? ' · ' + fw.turns + (fw.turns === 1 ? ' turn' : ' turns') : '')]),
+            h('p', { class: 'pds-fw-for' }, ['Best for ' + fw.bestFor, fw.turns ? h('span', { title: 'A turning point is a moment where the story changes direction: what the room believed gives way to something new.' }, [' · ' + fw.turns + (fw.turns === 1 ? ' turning point' : ' turning points')]) : null]),
             first ? h('p', { class: 'pds-fw-why' }, [PD.story.pickText(story(), id)]) : null,
             curve(fw, first),
             fw.beats.length ? chips(fw) : h('p', { class: 'pds-fw-blank' }, ['No beats. You lay out every scene yourself, on the storyboard.'])
@@ -111,7 +117,7 @@ PD.module('studio/screens/shape', ['studio/app'], function (PD, app) {
         if (fw && fw.beats.length) {
           var pl = PD.story.board.plan(s, fw);
           info.appendChild(h('b', null, [pl.n + (pl.n === 1 ? ' scene' : ' scenes')]));
-          info.appendChild(document.createTextNode(s.targetMin ? ' for a ' + s.targetMin + '-minute slot' : ' to start (set your slot on the Brief for a better count)'));
+          info.appendChild(document.createTextNode(s.targetMin ? ' for ' + article(s.targetMin) + ' ' + s.targetMin + '-minute slot.' : ' to start (set your slot on the Brief for a better count).'));
           if (pl.asked > pl.n) info.appendChild(h('span', { class: 'pds-plan-note' }, [' This shape holds ' + pl.n + '; add your own on the storyboard.']));
         } else info.appendChild(document.createTextNode('An empty storyboard, ready for your own scenes.'));
         foot.appendChild(info);
@@ -128,7 +134,7 @@ PD.module('studio/screens/shape', ['studio/app'], function (PD, app) {
             d.deck.meta.story = Object.assign({}, d.deck.meta.story, s);
             d.deck.scenes = scenes;
             d.studio.selected = { sceneId: scenes.length ? scenes[0].id : null, step: 0 };
-          });
+          }, { merge: false });
           var seenLook = !!(store.get().studio.visited && store.get().studio.visited.look);
           ctx.ui.toast(scenes.length ? 'Built ' + scenes.length + (scenes.length === 1 ? ' scene' : ' scenes') + (seenLook ? ' for you to fill in.' : '. Pick a look next, then fill them in.') : 'Started an empty storyboard.');
           ctx.nav(seenLook ? 'board' : 'look');
@@ -137,9 +143,15 @@ PD.module('studio/screens/shape', ['studio/app'], function (PD, app) {
         else run();
       }
 
-      // a chip too narrow for its label keeps its colour and drops the text (the tooltip still names it)
+      // a chip too narrow for its label first takes a second line ("What could / be"); only one still too narrow for that keeps
+      // its colour and drops the text (the tooltip still names it)
       function fitChips() {
-        Array.prototype.forEach.call(grid.querySelectorAll('.pds-beat'), function (c) { c.classList.toggle('is-clip', c.scrollWidth > c.clientWidth + 1); });
+        Array.prototype.forEach.call(grid.querySelectorAll('.pds-beat'), function (c) {
+          c.classList.remove('is-clip', 'is-wrap');
+          if (c.scrollWidth <= c.clientWidth + 1) return;
+          c.classList.add('is-wrap');
+          if (c.scrollWidth > c.clientWidth + 1 || c.scrollHeight > c.clientHeight + 1) { c.classList.remove('is-wrap'); c.classList.add('is-clip'); }
+        });
       }
       var ro = typeof ResizeObserver === 'function' ? new ResizeObserver(function () { fitChips(); }) : null;
       if (ro) ro.observe(grid);

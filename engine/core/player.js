@@ -28,7 +28,7 @@
  * textarea, select or [contenteditable] are ignored; with a container, keys count only when the focus is inside it or
  * on <body>. N opens <page>?notes with noopener (its own process, synced over BroadcastChannel), never a same-thread
  * popup (spec §1.3, R2), through a shift-clicked link rather than window.open() so the stage never waits for the new
- * window. That departs from the window.open call written in §4.10 and awaits the lead's amendment (see openNotes).
+ * window. That replaces the window.open call written in §4.10, as ratified in spec AMEND-6 (see openNotes).
  *
  * window.PixelDeck (spec §4.13): info() → [{ id, steps, dwell, stepDwell?, beat? }], isBusy(), next(), prev(),
  * goTo(si, step), finish(), state() → { slide, step, particles, busy, fps, workMs, ready }, setManualClock(on),
@@ -202,7 +202,7 @@ PD.module('core/player', ['core/util', 'core/glow', 'core/theme', 'core/assets',
        * the idle time between frames, a slice at a time while the frame budget allows, so `ready` comes sooner
        * (spec §4.15). It starts from frame(), i.e. after a real animation frame, and stops in manual-clock mode, so the
        * golden runs (RAF stubbed, manual clock) and the stage's tick order are untouched.
-       * ADDITION to spec §4.10's boot sequence, pending the lead's amendment: with the warm-up only inside stage.tick
+       * ADDITION to spec §4.10's boot sequence, ratified as spec AMEND-7: with the warm-up only inside stage.tick
        * (§4.5 step 9, one slice per frame as today) `ready` came 2.5–3.4 s after the page opened on this M2 (median
        * 3.15 s at 1920×1080, over the 3 s budget of §4.15 in 8 of 16 runs). With the idle slices it is 1.02–1.10 s. */
       var idleId = 0;
@@ -259,7 +259,7 @@ PD.module('core/player', ['core/util', 'core/glow', 'core/theme', 'core/assets',
       }
       /* N: the same page with ?notes, in a window of its own with no opener (noopener), so it runs in its own process
        * and talks to this stage over BroadcastChannel. Not with sync off (nothing could drive it).
-       * DEVIATION from the letter of spec §4.10, pending the lead's amendment (R18): §4.10 says
+       * Spec AMEND-6 (ratified) replaces the letter of spec §4.10 here: §4.10 says
        * window.open(url, '_blank', 'noopener,popup,width=1200,height=760'). That call blocks the calling page until the
        * browser has built the new window: 52–216 ms per call (Playwright's Chromium 141 and Google Chrome 155, headless
        * and headed). The stage's frame gap at that moment was 33–333 ms, over the 50 ms limit of WP1 acceptance #4 and
@@ -415,7 +415,7 @@ PD.module('core/player', ['core/util', 'core/glow', 'core/theme', 'core/assets',
     });
   }
 
-  /* The export self-test (spec §3.6): render every state once, report what threw. Never rejects. */
+  /* The export self-test (spec §3.6): render every state once, report what threw or failed to draw. Never rejects. */
   function selfTest(o) {
     var t0 = performance.now(), errors = [];
     function post(ok) {
@@ -431,6 +431,8 @@ PD.module('core/player', ['core/util', 'core/glow', 'core/theme', 'core/assets',
       for (var si = 0; si < sc.length; si++) {
         for (var k = 0; k <= st.stepsOf(si); k++) {
           try { st.still(si, k); } catch (e) { errors.push({ slide: si, step: k, msg: String(e && e.message || e) }); }
+          // what failed while drawing: the stage skips it and keeps drawing (Stage.fault), the self-test still reports it
+          st.faults.splice(0).forEach(function (m) { errors.push({ slide: si, step: k, msg: m }); });
         }
       }
       p.destroy();

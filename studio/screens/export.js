@@ -16,6 +16,9 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
   var S = PD.studio, h = S.h, icon = S.icon, store = S.store, say = PD.story.say;
 
   var SAFE = ['system-ui', 'ui-sans-serif', 'sans-serif', 'serif', 'monospace', 'arial', 'helvetica', 'georgia', 'times new roman', 'courier new', 'verdana', 'tahoma', 'segoe ui', 'roboto', '-apple-system', 'blinkmacsystemfont'];
+  var FIT = { 'copy.lines': 1, 'build.text.overflow': 1, 'build.template.prop-max': 1 };     // Director findings: something too long or out of range
+  // CSS names for "the computer's own font", which are not font names a person would recognise
+  var SYSTEM = ['system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace', 'sans-serif', 'serif', 'monospace', '-apple-system', 'blinkmacsystemfont'];
 
   function fmtBytes(n) {
     if (n < 1024) return n + ' B';
@@ -27,18 +30,32 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
     return m ? (m[1] || m[2] || m[3] || '').trim() : '';
   }
   function slugOf(p) { return persist.slug(p.deck.meta.title || '', 48) || p.deck.id; }
+  // the exported source is named after the folder it is meant for (decks/<slug>/), so tools/export.js on that folder writes
+  // export/<slug>.html. The project's own id (made from the title the deck had when it was created) stays as it is.
+  function sourceId(p) { return slugOf(p); }
 
   /* ---------------------------------------------------------- building the file (shared by the screen and ⌘S) */
   var built = { hash: null, html: null, bytes: 0, test: null, running: null };
   function invalidate() { built.hash = null; built.html = null; built.test = null; built.running = null; }
+  // the steps the author has been through travel with the file (meta.studio.visited), so a deck opened again keeps its ticks;
+  // the Studio takes the field off again when it opens the file, and the player ignores it
+  function visitedOf(p) { var v = p.studio.visited || {}; return Object.keys(v).filter(function (k) { return v[k]; }).sort(); }
+  function fileDeck(p) {
+    var steps = visitedOf(p);
+    if (!steps.length) return p.deck;
+    var d = persist.clone(p.deck);
+    d.meta.studio = { visited: steps };
+    return d;
+  }
+  function buildKey() { var p = store.get(); return store.hash() + '|' + visitedOf(p).join(','); }
   function buildHTML() {
     var p = store.get();
-    var html = PD.exportHTML(p.deck.id, { deck: p.deck, assets: store.assets() });
+    var html = PD.exportHTML(p.deck.id, { deck: fileDeck(p), assets: store.assets() });
     return { html: html, bytes: new Blob([html]).size };
   }
   // build, then run the self-test; the result is kept until the project changes
   function ensureBuilt() {
-    var key = store.hash();
+    var key = buildKey();
     if (built.hash === key && built.test) return Promise.resolve(built.test);
     if (built.hash === key && built.running) return built.running;
     var b;
@@ -102,11 +119,12 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
   /* ---------------------------------------------------------- source files */
   function pretty(v) { return JSON.stringify(v, null, 2).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029'); }
   function sourceFiles(p) {
-    var id = p.deck.id, slug = slugOf(p), theme = p.deck.meta.theme;
+    var slug = slugOf(p), id = sourceId(p), theme = p.deck.meta.theme, deck = persist.clone(p.deck);
+    deck.id = id;
     var how = '/* Written by the Pixeldeck Studio. To run it by hand: copy decks/_starter/ to decks/' + slug + '/, replace deck.js and assets.js with\n' +
       ' * these two files, and set the theme script in index.html and notes.html (../../themes/' + theme + '/theme.js). */\n';
     return {
-      deck: { name: 'deck.js', text: how.replace('Written', 'deck.js: written') + 'PD.deck(' + JSON.stringify(id) + ', ' + pretty(p.deck) + ');\n' },
+      deck: { name: 'deck.js', text: how.replace('Written', 'deck.js: written') + 'PD.deck(' + JSON.stringify(id) + ', ' + pretty(deck) + ');\n' },
       assets: { name: 'assets.js', text: how.replace('Written', 'assets.js: written') + 'PD.assets(' + JSON.stringify(id) + ', ' + pretty(store.assets()) + ');\n' }
     };
   }
@@ -152,7 +170,7 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
         else if (state === 'warn') r.ic.appendChild(icon('warn', 14));
         else if (state === 'fail') r.ic.appendChild(icon('close', 14));
         r.detail.textContent = text || '';
-        if (go) r.detail.appendChild(h('button', { class: 'pds-link', type: 'button', 'data-go': go.to, onclick: function () { S.nav(go.to); } }, [go.label]));
+        if (go) r.detail.appendChild(h('button', { class: 'pds-link', type: 'button', 'data-go': go.to, onclick: function () { if (go.sceneId) store.select(go.sceneId, go.step || 0); S.nav(go.to); } }, [go.label]));
       }
 
       var resultCard = h('div', { class: 'pds-result', hidden: true, 'data-saved': '0' });
@@ -167,7 +185,7 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
         resultCard.appendChild(icon(store.isSaved() ? 'check' : 'warn', 18));
         resultCard.appendChild(h('div', null, [
           h('b', null, [store.isSaved() ? 'Saved ' + (p.studio.fileName || '') : 'Changed since you last saved']),
-          h('span', null, [store.isSaved() ? ui.ago(p.studio.savedAt) + (built.bytes && built.hash === store.hash() ? ' · ' + fmtBytes(built.bytes) : '') + '. Double-click it to present, no internet needed.' : 'Save again to bring the file up to date.'])
+          h('span', null, [store.isSaved() ? ui.ago(p.studio.savedAt) + (built.bytes && built.hash === buildKey() ? ' · ' + fmtBytes(built.bytes) : '') + '. Double-click it to present, no internet needed.' : 'Save again to bring the file up to date.'])
         ]));
       }
 
@@ -185,7 +203,7 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
       ]);
       actions.appendChild(h('section', { class: 'pds-act' }, [
         h('h3', null, ['Export source']),
-        h('p', null, ['Copy ', h('code', null, ['decks/_starter/']), ' to ', h('code', null, ['decks/' + slugOf(store.get()) + '/']), ', replace these two files, and set the theme script in index.html.']),
+        h('p', null, ['Copy ', h('code', null, ['decks/_starter/']), ' to ', h('code', null, ['decks/' + slugOf(store.get()) + '/']), ', replace these two files, and set the theme script in index.html and notes.html to ', h('code', null, ['../../themes/' + store.get().deck.meta.theme + '/theme.js']), '.']),
         srcRow
       ]));
       var cmd = h('code', { class: 'pds-cmd', 'data-cmd': 'record' }, [recCmd]);
@@ -210,6 +228,15 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
       el.appendChild(page);
 
       /* ---- run the checklist ---- */
+      // text that does not fit its space (it wraps into the line under it, or runs off the frame) is only a warning to the
+      // Director, but it is the one a room sees: it is not a green tick here
+      function paintDirector(res) {
+        var dErr = res.findings.filter(function (f) { return f.sev === 'error'; }).length, fit = res.findings.filter(function (f) { return FIT[f.id]; });
+        if (dErr) setRow('director', 'warn', say('lint.notReady', { e: dErr }).replace(/^1 things/, '1 thing'), { to: 'board', label: 'Open the storyboard' });
+        else if (fit.length) setRow('director', 'warn', (fit.length === 1 ? 'One thing on your slides does not fit its space' : fit.length + ' things on your slides do not fit their space') + (fit[0].sceneId ? ' (scene ' + (store.sceneIndex(fit[0].sceneId) + 1) + ': ' + String(fit[0].msg || '').replace(/[.\s]+$/, '') + ')' : '') + '. You can still present, but fix ' + (fit.length === 1 ? 'it' : 'them') + ' first.',
+          { to: 'board', label: 'Show me', sceneId: fit[0].sceneId, step: fit[0].step });
+        else setRow('director', 'ok', say('lint.ready') + '. Score ' + res.score + '.');
+      }
       function run() {
         var id = ++runId, p = store.get();
         if (!p) return;
@@ -224,15 +251,14 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
         var errs = issues.filter(function (i) { return i.level === 'error'; }), warns = issues.filter(function (i) { return i.level === 'warn'; });
         if (errs.length) setRow('validate', 'fail', errs.length + (errs.length === 1 ? ' setting is' : ' settings are') + ' broken. Scene ' + (errs[0].scene + 1) + ': ' + errs[0].msg);
         else setRow('validate', 'ok', warns.length ? 'Nothing is broken. ' + warns.length + (warns.length === 1 ? ' thing is' : ' things are') + ' worth a look.' : 'Nothing is broken.');
-        // 3: the Director
-        var dErr = res.findings.filter(function (f) { return f.sev === 'error'; }).length;
-        if (dErr) setRow('director', 'warn', say('lint.notReady', { e: dErr }).replace(/^1 things/, '1 thing'), { to: 'board', label: 'Open the storyboard' });
-        else setRow('director', 'ok', say('lint.ready') + '. Score ' + res.score + '.');
+        // 3: the Director (painted again whenever a fresh lint lands: the one cached at an edit made just before can be stale)
+        paintDirector(res);
         // 4: the font
         var t = c.theme, fam = firstFamily(t.fonts && t.fonts.display), assets = store.assets();
         var embedded = (t.fontFaces || []).some(function (f) { return f.family === fam; }) || Object.keys(assets).some(function (k) { return assets[k].type === 'font' && assets[k].family === fam; });
         if (embedded) setRow('font', 'ok', fam + ' is embedded in the file.');
-        else if (SAFE.indexOf(fam.toLowerCase()) >= 0) setRow('font', 'ok', fam + ' is on every computer.');
+        else if (SYSTEM.indexOf(fam.toLowerCase()) >= 0) setRow('font', 'ok', 'The look uses each computer\u2019s own system font, so nothing has to travel with the deck. It looks a little different on a Mac and on Windows.');
+        else if (SAFE.indexOf(fam.toLowerCase()) >= 0) setRow('font', 'ok', fam + ' is on almost every computer.');
         else setRow('font', 'warn', say('export.fontWarn', { font: fam }), { to: 'look', label: 'Choose a font' });
         // 5, 6: build the file, then play it
         setRow('size', 'run', 'Putting the file together…');
@@ -261,6 +287,7 @@ PD.module('studio/screens/export', ['studio/app', 'studio/persist', 'core/export
         timer = setTimeout(function () { if (alive) run(); }, 500);
         paintResult();
       }));
+      offs.push(store.on('lint', function (res) { if (alive && res && res.findings) paintDirector(res); }));
       var onSaved = function () { paintResult(); };
       document.addEventListener('pdstudio:saved', onSaved);
       return { unmount: function () { alive = false; clearTimeout(timer); offs.forEach(function (o) { o(); }); document.removeEventListener('pdstudio:saved', onSaved); } };

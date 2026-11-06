@@ -97,6 +97,35 @@ T.test('recommend: the §6.3 table, first match wins (every row, and the fall-th
   a.equal(R({ goal: 'launch' }).row, PD.story.RECOMMEND[1]);
 });
 
+T.test('frameworks: the F2-F4 examples speak to a small business, not an AI consultancy (giant-leap keeps One Giant Leap\'s own lines)', function (a) {
+  ['sparkline', 'psf', 'scqa'].forEach(function (id) {
+    PD.framework.get(id).beats.forEach(function (b) {
+      a.ok(!/\bAI\b|augment|automat|workflow|co-pilot|licen[cs]e|hand-off|headcount|copy-past/i.test(b.example), id + '/' + b.id + ': ' + b.example);
+    });
+  });
+  a.ok(PD.story.startsImperative(PD.framework.get('scqa').beats[5].example) && PD.story.startsImperative(PD.framework.get('psf').beats[6].example) &&
+    PD.story.startsImperative(PD.framework.get('sparkline').beats[3].example), 'the ask examples start with a verb the brief accepts');
+  a.equal(PD.framework.get('giant-leap').beats[7].example, 'Not automation. → Augmentation.');
+});
+
+T.test('recommend: a slot shorter than the shape\'s smallest board hands the pick to the runner-up when that one is smaller (review: 3 and 5 minutes got giant-leap)', function (a) {
+  var R = PD.story.recommend, three = [{ kind: 'number', text: 'x', value: 1 }, { kind: 'quote', text: 'y' }, { kind: 'story', text: 'z' }];
+  a.deepEqual([PD.story.minScenes(PD.framework.get('giant-leap'), {}), PD.story.minScenes(PD.framework.get('sparkline'), {}), PD.story.minScenes(PD.framework.get('psf'), {}), PD.story.minScenes(PD.framework.get('scqa'), {})], [8, 6, 6, 5]);
+  a.deepEqual([PD.story.minScenes(PD.framework.get('giant-leap'), { proof: three }), PD.story.minScenes(PD.framework.get('sparkline'), { proof: three })], [10, 7], 'a proof beat makes room for every proof row');
+  function is(story, rec, alt, slot) { var r = R(story); a.deepEqual([r.id, r.runnerUp, !!r.slot], [rec, alt, slot], JSON.stringify(story)); }
+  is({ goal: 'inspire', tone: 'cinematic', targetMin: 5 }, 'sparkline', 'giant-leap', true);
+  is({ goal: 'inspire', tone: 'cinematic', targetMin: 3 }, 'sparkline', 'giant-leap', true);
+  is({ goal: 'inspire', tone: 'cinematic', targetMin: 7 }, 'giant-leap', 'sparkline', false);
+  is({ goal: 'inspire', tone: 'cinematic', targetMin: 7, proof: three }, 'sparkline', 'giant-leap', true);
+  is({ goal: 'inspire', tone: 'cinematic', targetMin: 10, proof: three }, 'giant-leap', 'sparkline', false);
+  is({ goal: 'inspire', tone: 'cinematic', targetMin: null }, 'giant-leap', 'sparkline', false);
+  is({ goal: 'teach', targetMin: 4 }, 'scqa', 'psf', true);
+  is({ goal: 'launch', targetMin: 3 }, 'psf', 'sparkline', false);
+  is({ goal: 'decide', targetMin: 3 }, 'scqa', 'psf', false);
+  a.equal(PD.story.pickText({ goal: 'inspire', tone: 'cinematic', targetMin: 5 }), "Here's the shape we'd suggest. One Giant Leap needs more than 5 minutes, so What is / what could be fits your slot better.");
+  a.ok(PD.story.pickText({ goal: 'inspire', tone: 'cinematic', targetMin: 5 }, 'giant-leap').indexOf('vision keynotes') > 0, 'the chosen shape explains itself as usual');
+});
+
 T.test('recommend: the default look follows the tone, and fw.pick explains the choice', function (a) {
   a.equal(PD.story.defaultTheme('cinematic'), 'cosmos');
   ['warm', 'crisp', 'playful', null, undefined].forEach(function (t) { a.equal(PD.story.defaultTheme(t), 'slate', String(t)); });

@@ -113,6 +113,9 @@ kbd { font-size: 11px; color: var(--muted); border: 1px solid var(--line); borde
 .pds-logline-text { font-size: 14px; color: var(--text-dim); font-style: italic; letter-spacing: .005em; }
 .pds-logline-text::before { content: "\201C"; color: var(--accent); margin-right: 2px; font-style: normal; font-weight: 700; }
 .pds-logline-text::after { content: "\201D"; color: var(--accent); margin-left: 1px; font-style: normal; font-weight: 700; }
+/* on the storyboard every pixel of height goes to the workspace: the logline keeps to one line (the whole of it is its tooltip) */
+.pds[data-screen="board"] .pds-logline { padding: 6px 24px 7px; }
+.pds[data-screen="board"] .pds-logline-text { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* notices */
 .pds-banners { flex: none; display: flex; flex-direction: column; }
@@ -171,7 +174,7 @@ kbd { font-size: 11px; color: var(--muted); border: 1px solid var(--line); borde
 .pds-display { margin: 0 0 20px; font: 640 clamp(40px, 5.2vw, 64px)/1.02 var(--font-display); letter-spacing: -.03em; }
 .pds-display span { background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 70%, #fff) 0%, var(--accent) 45%, #c68cff 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .pds-lede { margin: 0; max-width: 58ch; font-size: 17px; line-height: 1.55; color: #b8c6da; }
-.pds-footnote { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12.5px; color: var(--faint); }
+.pds-footnote { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--muted); }          /* about 7:1 on --bg: it carries the one warning that matters (autosave is not a file) */
 .pds-empty { margin: 0; padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--r); color: var(--muted); font-size: 14px; }
 .pds-note { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
 
@@ -209,7 +212,7 @@ kbd { font-size: 11px; color: var(--muted); border: 1px solid var(--line); borde
 .pds-welcome-sec { min-width: 0; }
 .pds-forget { position: absolute; right: 4px; top: 50%; margin-top: -22px; opacity: 0; }
 .pds-welcome-row:hover .pds-forget, .pds-forget:focus-visible { opacity: 1; }
-.pds-welcome .pds-footnote { margin-top: 4px; animation: pds-rise .7s .15s var(--ease) both; }
+.pds-welcome .pds-footnote { margin-top: 4px; animation: pds-rise .7s .15s var(--ease) both; color: var(--text-dim); text-shadow: 0 1px 2px rgba(18, 19, 31, .9), 0 0 12px rgba(18, 19, 31, .8); }       /* readable over the nebula too */
 @media (max-height: 800px) { .pds-welcome { gap: 14px; padding-top: 70px; } .pds-welcome-copy .pds-display { font-size: 50px; margin-bottom: 12px; } .pds-welcome-actions { margin-bottom: 20px; } .pds-welcome-copy .pds-lede { margin-bottom: 18px; } }
 
 /* ---------------------------------------------------------- Brief */
@@ -335,6 +338,7 @@ select.pds-input { appearance: none; -webkit-appearance: none; padding-right: 32
 .pds-beat { min-width: 0; display: block; padding: 5px 6px; border-radius: 7px; font: 600 11px/1.3 var(--font-ui); letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border: 1px solid color-mix(in srgb, var(--c) 34%, transparent); }
 .pds-beat.is-optional { border-style: dashed; }
 .pds-beat.is-clip { color: transparent; }
+.pds-beat.is-wrap { white-space: normal; text-overflow: clip; line-height: 1.15; padding-top: 2px; padding-bottom: 2px; overflow-wrap: normal; display: flex; align-items: center; }
 .pds-fw.is-recommended .pds-beat { min-width: 46px; }
 .pds-fw:not(.is-recommended) .pds-fw-beats { min-height: 10px; gap: 3px; }
 .pds-fw:not(.is-recommended) .pds-beat { height: 9px; padding: 0; font-size: 0; border-radius: 5px; }
@@ -350,6 +354,9 @@ select.pds-input { appearance: none; -webkit-appearance: none; padding-right: 32
 .pds-look-head { margin-bottom: 16px; }
 .pds-look-head .pds-lede { max-width: none; }
 .pds-look-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-bottom: 18px; }
+.pds-look-note { display: flex; align-items: flex-start; gap: 8px; margin: -6px 0 18px; padding: 10px 14px; border-radius: 12px; background: rgba(255, 204, 102, .08); border: 1px solid rgba(255, 204, 102, .3); color: var(--warn); font-size: 13.5px; line-height: 1.45; }
+.pds-look-note .pds-icon { flex: none; margin-top: 2px; }
+.pds-look-note .pds-link { color: var(--text); margin-bottom: -12px; }
 .pds-look-card { position: relative; display: grid; gap: 8px; padding: 12px 12px 16px; border-radius: 20px; background: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .012)); border: 1px solid var(--line-soft); cursor: pointer;
   animation: pds-rise .55s var(--ease) both; animation-delay: calc(var(--i, 0) * 90ms); transition: border-color .25s, box-shadow .3s var(--ease), transform .3s var(--ease); }
 .pds-look-card input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }

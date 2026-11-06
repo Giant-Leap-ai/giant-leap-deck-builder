@@ -10,7 +10,8 @@
  *     css(id, text)                       inject a <style data-pd-studio=id> once (re-registering replaces it)
  *     debounce(fn, ms) → fn with .flush() .cancel() .pending()
  *     fmtClock(sec) → 'm:ss'    fmtSecs(sec) → '42 s' | '1 min 5 s'    plural(n, one, many)
- *     BEAT_COLORS, beatColor(i)           the beat palette (index in the framework)
+ *     BEAT_COLORS, beatColor(i)           the beat palette (index in the framework), used when there is no shell
+ *     colorOfBeat(beat, i, fn?)           the colour of a beat everywhere: fn, else PD.studio.beatColor (Shape's), else beatColor(i)
  *     describeScenes(compiled, lint, opts) → SceneInfo[]
  *     menu(items, { x, y }) → { close }   popover menu; modal({ title, body, wide }) → { el, close }; snack(msg, { action })
  *     hlArea(opts) → { el, input, set, get, focus }   textarea whose [placeholders] and ▸ prompts are painted (a mirror)
@@ -227,6 +228,7 @@ PD.module('studio/ui/forms', [], function (PD) {
     '  background-position: calc(100% - 17px) 15px, calc(100% - 12px) 15px; background-size: 5px 5px; background-repeat: no-repeat; }',
     '.pdx-select option { background: #1e2033; color: var(--pdx-text); }',
     '.pdx-num { width: 64px; text-align: right; height: 28px; padding: 0 8px; border-radius: 8px; font: 600 12px var(--pdx-mono); }',
+    '.pdx-num.is-out { border-color: var(--pdx-warn); color: var(--pdx-warn); }',
     /* range */
     '.pdx-range { -webkit-appearance: none; appearance: none; width: 100%; height: 28px; background: transparent; cursor: pointer; margin: 0; }',
     '.pdx-range::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--pdx-accent) var(--pct, 0%), var(--pdx-line) var(--pct, 0%)); }',
@@ -260,7 +262,12 @@ PD.module('studio/ui/forms', [], function (PD) {
     '.pdx-item:hover { border-color: var(--pdx-hair); }',
     '.pdx-item.is-new { animation: pdx-in .32s var(--pdx-ease); }',
     '.pdx-item .no { flex: none; width: 22px; height: 22px; margin-top: 2px; border-radius: 50%; display: grid; place-items: center; font: 650 11px var(--pdx-mono); background: var(--pdx-well); color: var(--pdx-muted); }',
-    '.pdx-item .bd { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }',
+    '.pdx-item .bd { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; container-type: inline-size; }',
+    // an item's fields sit side by side when there is room (a milestone's When and What), and stack in a narrow inspector, where
+    // a 100 px column would wrap "Ship every week" over three lines and run its counter into the next field's label
+    '.pdx-li-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }',
+    '.pdx-li-row.is-two { grid-template-columns: minmax(0, .55fr) minmax(0, 1fr); }',
+    '@container (max-width: 420px) { .pdx-li-row.is-two { grid-template-columns: minmax(0, 1fr); gap: 8px; } }',
     '.pdx-item .ops { flex: none; display: flex; flex-direction: column; gap: 2px; }',
     '.pdx-more { margin-top: 2px; } .pdx-more > summary { cursor: pointer; list-style: none; color: var(--pdx-muted); font-size: 11.5px; font-weight: 600; display: inline-flex; gap: 4px; align-items: center; padding: 2px 0; }',
     '.pdx-more > summary::-webkit-details-marker { display: none; } .pdx-more > summary:hover { color: var(--pdx-text); }',
@@ -294,6 +301,13 @@ PD.module('studio/ui/forms', [], function (PD) {
   var BEAT_COLORS = ['#ef7d57', '#ffcd75', '#a7f070', '#4fd19a', '#73eff7', '#41a6f6', '#9a96f5', '#d983e8', '#ff7a99', '#94b0c2'];
   var NEUTRAL = '#7389a6';
   function beatColor(i) { return i == null || i < 0 ? NEUTRAL : BEAT_COLORS[i % BEAT_COLORS.length]; }
+  // one colour per beat wherever the workspace shows it (cards, arc, menus, Rehearse): the given function, else the shell's
+  // role colours (PD.studio.beatColor, which Shape's chips use), else the palette by index when there is no shell
+  function colorOfBeat(beat, i, fn) {
+    var bc = typeof fn === 'function' ? fn : PD.studio && typeof PD.studio.beatColor === 'function' ? PD.studio.beatColor : null;
+    if (bc && beat) { try { var c = bc(beat); if (c) return c; } catch (e) { } }
+    return beatColor(i);
+  }
 
   function storyOf(compiled) { return compiled && compiled.meta && isObj(compiled.meta.story) ? compiled.meta.story : null; }
   function frameworkOf(compiled) {
@@ -341,7 +355,7 @@ PD.module('studio/ui/forms', [], function (PD) {
       if (!sev[f.sceneId] || RANK[f.sev] > RANK[sev[f.sceneId]]) sev[f.sceneId] = f.sev;
     });
     var srcs = compiled.source && Array.isArray(compiled.source.scenes) ? compiled.source.scenes : [];
-    var colorOf = function (beat, bi) { if (typeof opts.beatColor === 'function' && beat) { try { var c = opts.beatColor(beat); if (c) return c; } catch (e) { } } return beatColor(bi); };
+    var colorOf = function (beat, bi) { return colorOfBeat(beat, bi, opts.beatColor); };
     return compiled.scenes.map(function (cs, i) {
       var src = srcs[i] || cs, isTpl = isObj(src) && src.template !== undefined;
       var tplId = isTpl ? src.template : (cs.like || null), T = tplId ? PD.template.get(tplId) || null : null;
@@ -521,6 +535,18 @@ PD.module('studio/ui/forms', [], function (PD) {
       }
     });
     ta.addEventListener('blur', function () { if (opts.onBlur) opts.onBlur(ta.value); });
+    // a "▸ prompt" line is a question for the speaker, and its whole line is left out of what they say (PD.story.speech). Words
+    // typed at the end of one would vanish with it, so typing there starts a new line first (where the caret lands on a click)
+    if (opts.prompts && !opts.single) ta.addEventListener('beforeinput', function (e) {
+      if (opts.readOnly || e.isComposing || !/^insert(Text|FromPaste|FromDrop)$/.test(e.inputType || '')) return;
+      var v = ta.value, at = ta.selectionStart;
+      if (at !== ta.selectionEnd) return;
+      var ls = v.lastIndexOf('\n', at - 1) + 1, le = v.indexOf('\n', at);
+      if (le < 0) le = v.length;
+      if (at !== le || v.slice(ls, le).replace(/^\s+/, '').charAt(0) !== '\u25b8') return;
+      if (typeof e.data === 'string' && /^\s*\n/.test(e.data)) return;
+      ta.setRangeText('\n', at, at, 'end');
+    });
     // a [placeholder] is there to be typed over: focusing a field that is only a placeholder selects it, and a click inside one selects that one
     function pickToken() {
       if (ta.selectionStart !== ta.selectionEnd || opts.readOnly) return;
@@ -630,7 +656,26 @@ PD.module('studio/ui/forms', [], function (PD) {
       if (range) { range.value = v == null ? min : v; range.style.setProperty('--pct', ((clamp(+range.value, min, max) - min) / (max - min) * 100) + '%'); }
     }
     function emit(v, live) { value = v; api.onChange(v, { live: live }); }
-    num.addEventListener('input', function () { var v = num.value === '' ? null : +num.value; if (v == null || !isFinite(v)) return; if (range) range.value = v, range.style.setProperty('--pct', ((clamp(v, min, max) - min) / (max - min) * 100) + '%'); emit(v, true); });
+    // a typed number outside the template's range never reaches the deck: while typing it is held back ("-5" on the way to "-50"
+    // would break the scene, and "1" on the way to "15" is not a value yet), and when the field is left it is brought into range
+    function inRange(v) { return (min == null || v >= min) && (max == null || v <= max); }
+    function fit(v) { if (min != null && v < min) v = min; if (max != null && v > max) v = max; return spec.int ? Math.round(v) : v; }
+    num.addEventListener('input', function () {
+      var v = num.value === '' ? null : +num.value;
+      if (v == null || !isFinite(v)) return;
+      num.classList.toggle('is-out', !inRange(v));
+      if (!inRange(v)) return;
+      if (range) range.value = v, range.style.setProperty('--pct', ((clamp(v, min, max) - min) / (max - min) * 100) + '%');
+      emit(v, true);
+    });
+    num.addEventListener('change', function () {
+      num.classList.remove('is-out');
+      var v = num.value === '' ? null : +num.value;
+      if (v == null || !isFinite(v)) { paint(value); return; }
+      var c = fit(v);
+      paint(c);
+      if (c !== value) emit(c, false);
+    });
     num.addEventListener('keydown', function (e) { if (e.key === 'Enter') num.blur(); });
     if (range) range.addEventListener('input', function () { var v = +range.value; num.value = fmt(v); range.style.setProperty('--pct', ((v - min) / (max - min) * 100) + '%'); emit(v, true); });
     if (range) { sh.right.appendChild(num); sh.right.style.display = 'flex'; sh.right.style.alignItems = 'center'; sh.root.insertBefore(range, sh.foot); }
@@ -784,7 +829,7 @@ PD.module('studio/ui/forms', [], function (PD) {
         } else {
           var keys = Object.keys(subs), main = [], extra = [];
           keys.forEach(function (k) { (subs[k].required || subs[k].type === 'text' ? main : extra).push(k); });
-          var row = h('div', { style: 'display:grid;grid-template-columns:' + (main.length > 1 ? 'minmax(0,.55fr) minmax(0,1fr)' : '1fr') + ';gap:10px' });
+          var row = h('div', { class: 'pdx-li-row' + (main.length > 1 ? ' is-two' : '') });
           main.forEach(function (k) {
             var v = it[k] === undefined ? defaultFor(subs[k]) : it[k];
             var f = field(subs[k], v, itemApi(i, k), name + i + k); row.appendChild(f.el); fieldsOf.push(f);
@@ -861,7 +906,19 @@ PD.module('studio/ui/forms', [], function (PD) {
     return {
       el: root, fields: fields,
       set: function (values) { Object.keys(fields).forEach(function (k) { fields[k].set(values[k] === undefined ? defaultFor(schema[k]) : values[k]); }); },
-      focusFirst: function () { var k = main[0]; if (k && fields[k]) fields[k].focus(); }
+      // the first field that still holds a {placeholder} (with the placeholder selected, so typing replaces it), else the first field:
+      // "Write scene 2" on a statement lands on its line, not on the empty optional kicker above it
+      focusFirst: function () {
+        var hit = null, m = null;
+        Array.prototype.some.call(root.querySelectorAll('textarea, input'), function (el) {
+          if (el.readOnly || el.disabled || typeof el.value !== 'string') return false;
+          PH_RE.lastIndex = 0; m = PH_RE.exec(el.value); return !!(m && (hit = el));
+        });
+        if (!hit) { var k = main[0]; if (k && fields[k]) fields[k].focus(); return; }
+        for (var d = hit.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+        hit.focus();
+        try { hit.setSelectionRange(m.index, m.index + m[0].length); } catch (e) { }
+      }
     };
   }
 
@@ -901,7 +958,7 @@ PD.module('studio/ui/forms', [], function (PD) {
   return {
     h: h, svg: svg, icon: icon, clear: clear, css: css, ensureBase: ensureBase, debounce: debounce, clamp: clamp, clone: clone,
     fmtClock: fmtClock, fmtSecs: fmtSecs, plural: plural, cap: cap, humanize: humanize,
-    BEAT_COLORS: BEAT_COLORS, beatColor: beatColor, NEUTRAL: NEUTRAL, storyOf: storyOf, frameworkOf: frameworkOf, energyOf: energyOf,
+    BEAT_COLORS: BEAT_COLORS, beatColor: beatColor, colorOfBeat: colorOfBeat, NEUTRAL: NEUTRAL, storyOf: storyOf, frameworkOf: frameworkOf, energyOf: energyOf,
     describeScenes: describeScenes, firstLineOf: firstLineOf, wordsOf: wordsOf, speechOf: speechOf, speakSecs: speakSecs,
     menu: menu, closeMenu: closeMenu, modal: modal, snack: snack, seg: seg, switchEl: switchEl, hlArea: hlArea, paintInto: paintInto,
     field: field, buildForm: buildForm, defaultFor: defaultFor, shell: shell,

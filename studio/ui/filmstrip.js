@@ -184,7 +184,7 @@ PD.module('studio/ui/filmstrip', [], function (PD) {
       var items = [
         { label: 'Duplicate', icon: 'copy', onClick: function () { opts.onAction('duplicate', id); } },
         { label: 'Change template…', icon: 'swap', disabled: !inf.isTpl, onClick: function () { opts.onAction('change', id); } },
-        { label: 'Move to beat', icon: 'flag', disabled: !beats.length, sub: beats.map(function (b, i) { return { label: b.label, dot: f.beatColor(i), disabled: b.id === inf.beatId, onClick: function () { opts.onAction('beat', id, b.id); } }; }) },
+        { label: 'Move to beat', icon: 'flag', disabled: !beats.length, sub: beats.map(function (b, i) { return { label: b.label, dot: f.colorOfBeat(b, i), disabled: b.id === inf.beatId, onClick: function () { opts.onAction('beat', id, b.id); } }; }) },
         { sep: true },
         { label: 'Delete', icon: 'trash', danger: true, onClick: function () { opts.onAction('delete', id); } }
       ];

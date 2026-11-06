@@ -171,7 +171,7 @@ Pass 1 = notes window cold; pass 2 = Home, then the same run with warm notes cac
 ## Unit and e2e test runners (`tools/test/`)
 
 - `node tools/test/run.js [--grep re] [--headed] [--spec file]… [--timeout ms]` writes
-  `tools/test/.harness.html` (git-ignored) that loads `engine/pixeldeck.js`, `themes/*/theme.js`,
+  `tools/test/.harness-<pid>.html` (one per run, deleted afterwards, git-ignored) that loads `engine/pixeldeck.js`, `themes/*/theme.js`,
   `decks/*/theme.js`, `decks/*/assets.js`, `decks/*/deck.js`, `tools/test/assert.js` and
   `tools/test/specs/*.test.js` (each group alphabetical; absent groups are skipped), opens it from
   `file://` in Chromium and prints `ok` / `not ok` lines. Exit 1 on any failure, on an uncaught error

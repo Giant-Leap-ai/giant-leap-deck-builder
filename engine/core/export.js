@@ -70,14 +70,15 @@ PD.module('core/export', ['core/theme', 'core/compile'], function (PD, themeMod,
     return s.replace(/<\x2f(script)/gi, function (m, word) { return '<\\/' + word; })
             .replace(/<!\x2d\x2d/g, '<\\!--');
   }
+  // '*' too, so a title can never spell a marker (parse() looks for the markers in the whole file)
   function escapeText(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
+    return String(s).replace(/[&<>"'*]/g, function (c) {
+      return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : c === '*' ? '&#42;' : '&#39;';
     });
   }
   function unescapeText(s) {
-    return String(s).replace(/&(amp|lt|gt|quot|#39);/g, function (m, n) {
-      return n === 'amp' ? '&' : n === 'lt' ? '<' : n === 'gt' ? '>' : n === 'quot' ? '"' : "'";
+    return String(s).replace(/&(amp|lt|gt|quot|#39|#42);/g, function (m, n) {
+      return n === 'amp' ? '&' : n === 'lt' ? '<' : n === 'gt' ? '>' : n === 'quot' ? '"' : n === '#42' ? '*' : "'";
     });
   }
 

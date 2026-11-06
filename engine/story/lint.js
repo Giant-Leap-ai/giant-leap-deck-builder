@@ -22,7 +22,9 @@
  *       scenes: [{ i, id, beat, roles, tpl, like, energy, steps, sec, start, pos, notesWords, ignore: Set, scene, isTemplate,
  *                  texts: [text, …] (every text of the scene once, .step = the state that adds it),
  *                  states: [{ k, world, place, texts: [text], visibleWords, dense, sec, items, shapes, motion, timing }] }],
- *       place(world) → 'flat'|'hyperspace'|'galaxy'|'horizon'|'planet'|'void'|'space', echo(text) → bool,
+ *       place(world) → 'flat'|'hyperspace'|'galaxy'|'horizon'|'planet'|'void'|'space', echo(text) → bool (§6.7's echo of
+ *       the big idea, or of its six-word version: at least min(2, k) of shortIdea's k tokens. The brief asks for both,
+ *       and story.idea-echo's fix says to bring the short one back, so putting it on screen has to count),
  *       particles(state) → n (estimated particle targets of a state), notes(sceneInfo) → string[] (speech notes) }
  *     text = { str, style, size, reveal, color, box: { x, y, w, h } | null, lines: string[], overflow, maxWidth, words, at, id,
  *              step, spec }
@@ -175,12 +177,19 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
     var total = tmg.total;
     scenes.forEach(function (s) { s.pos = total > 0 ? (s.start + s.sec / 2) / total : 0; });
 
-    var echoCache = copy.tokens(bigTokens);
+    var echoCache = copy.tokens(bigTokens), shortIdea = story && typeof story.shortIdea === 'string' ? story.shortIdea : '';
+    var shortTokens = copy.tokens(shortIdea).filter(function (t, i, all) { return all.indexOf(t) === i; });
+    function echoShort(text) {
+      if (!shortTokens.length) return false;
+      var b = copy.tokens(text), n = 0;
+      shortTokens.forEach(function (t) { if (b.some(function (w) { return copy.match(t, w); })) n++; });
+      return n >= Math.min(2, shortTokens.length);
+    }
     return {
       compiled: compiled, story: story, fw: fw, beats: beats, theme: theme, timing: tmg, total: total, hasStory: !!story,
       hasCosmos: hasCosmos, scenes: scenes, env: env,
       place: function (w) { return placeOf(w, hasCosmos); },
-      echo: function (text) { return echoCache.length > 0 && copy.echo(bigTokens, text); },
+      echo: function (text) { return echoCache.length > 0 && (copy.echo(bigTokens, text) || echoShort(text)); },
       notes: function (s) {
         var out = [copy.speech(s.scene.notes)];
         tm.stepList(s.scene).forEach(function (st) { out.push(copy.speech(st && st.notes)); });
@@ -285,8 +294,10 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
     msg: "The ending doesn't echo your big idea.", fix: "Bring '{short}' back in the last two scenes.",
     check: function (ctx) {
       if (!ctx.hasStory || !String(ctx.story.bigIdea || '').trim() || !ctx.scenes.length) return [];
-      // §6.7: on-screen text of the scenes at pos >= .75, and only those (the last scene counts when its pos says so)
-      var found = ctx.scenes.some(function (s) { return s.pos >= 0.75 && allStrings(s).some(function (t) { return ctx.echo(t); }); });
+      // §6.7: on-screen text of the scenes at pos >= .75. The fix says "the last two scenes", so those count too, whatever their
+      // pos: a long proof scene can push the second-to-last one to .745, and the idea on screen there was reported missing
+      var n = ctx.scenes.length;
+      var found = ctx.scenes.some(function (s) { return (s.pos >= 0.75 || s.i >= n - 2) && allStrings(s).some(function (t) { return ctx.echo(t); }); });
       return found ? [] : [{ vars: { short: trimEnd(ctx.story.shortIdea || ctx.story.bigIdea) } }];
     } });
 
@@ -315,18 +326,26 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
     } });
 
   rule({ id: 'story.cta', sev: 'warn', area: 'story',
-    msg: "There's no clear ask. What should they do on Monday?", fix: "Put '{ask}' on screen in the final beat, or at least in its notes.",
+    msg: "There's no clear ask. What should they do on Monday?", fix: "Put '{ask}' on screen in the {beat} beat, or at least in its notes.",
     check: function (ctx) {
       if (!ctx.beats) return [];
       var ask = ctx.hasStory ? norm(ctx.story.ask || '') : '';
+      // a scene has the cta role through its beat, or through its template (the finale is "your closing line and ask"): the
+      // author's own ask on screen in a finale is a clear ask, even when the framework's last beat is not the cta beat (sparkline's
+      // new-bliss). A word in IMPERATIVES alone counts only in a cta beat (statement lists every role, so it would count anywhere).
       var ok = ctx.scenes.some(function (s) {
-        if (s.roles.indexOf('cta') < 0) return false;
-        var strs = allStrings(s).concat(ctx.notes(s));
-        return strs.some(function (t) { return (ask && norm(t).indexOf(ask) >= 0) || copy.startsImperative(t); });
+        var byBeat = s.roles.indexOf('cta') >= 0, T = s.isTemplate ? s.tpl : null;
+        var byTemplate = !!(ask && T && T.story && Array.isArray(T.story.roles) && T.story.roles.indexOf('cta') >= 0);
+        if (!byBeat && !byTemplate) return false;
+        var strs = allStrings(s).concat(ctx.notes(s));      // startsImperative: an unanswered '{ask}' starts with no verb
+        return strs.some(function (t) { return (ask && norm(t).indexOf(ask) >= 0) || (byBeat && copy.startsImperative(t)); });
       });
-      var given = ctx.story && String(ctx.story.ask || '').trim();
       if (ok) return [];
-      return given ? [{ vars: { ask: given } }] : [{ fix: 'Put your ask on screen in the final beat. Start with a verb: Book, Try, Pick.', vars: {} }];
+      // the fix names the beat that carries the cta role (sparkline's is "Call to action", not its last beat)
+      var ctaBeat = ctx.beats.filter(function (b) { return b.roles.indexOf('cta') >= 0; })[0];
+      var beat = ctaBeat ? ctaBeat.label.toLowerCase() : 'final';
+      var given = ctx.story && String(ctx.story.ask || '').trim();
+      return given ? [{ vars: { ask: given, beat: beat } }] : [{ fix: 'Put your ask on screen in the {beat} beat. Start with a verb: Book, Try, Pick.', vars: { beat: beat } }];
     } });
 
   rule({ id: 'story.thanks-ending', sev: 'info', area: 'story',
@@ -383,6 +402,22 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
     } });
 
   /* ================================================================ pace rules */
+  /* pace.runtime's fix has to be something the author can do without tripping another rule (§6.6 times a scene with notes by
+   * their words at 140 a minute, one without by its template's talk time):
+   *   over   cut a scene of a beat that has more than it starts with (story.beats-missing never follows), a proof beat first,
+   *          then an optional beat, then any; when every beat is down to its minimum, say less per scene (the notes are the
+   *          words the runtime counts), or pick a shorter shape
+   *   under  the notes are the talk: short cues are timed as short scenes, so write out what you'll say, or add a scene */
+  var RUN_UNDER = "Write out what you'll say in each scene's notes: they're timed at about 140 words a minute. Or add a scene with a story.";
+  var RUN_TIGHT = 'Every beat is down to its last scene, so say less in each: your notes are timed at about 140 words a minute. Or pick a shorter shape.';
+  function cuttable(ctx) {
+    if (!ctx.beats) return null;
+    var have = {};
+    ctx.scenes.forEach(function (s) { if (s.beatDef) have[s.beat] = (have[s.beat] || 0) + 1; });
+    function spare(b) { return (have[b.id] || 0) > (b.required ? Math.max(1, b.min) : b.min); }
+    return ctx.beats.filter(function (b) { return b.roles.indexOf('proof') >= 0 && spare(b); })[0] ||
+      ctx.beats.filter(function (b) { return !b.required && spare(b); })[0] || ctx.beats.filter(spare)[0] || null;
+  }
   rule({ id: 'pace.runtime', sev: 'warn', area: 'pace',
     msg: 'This runs about {est} min in a {target}-min slot.',
     fix: 'Running over: cut a proof scene first. Running under: add a story, not more text.',
@@ -392,8 +427,12 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
       if (!(t > 0)) return ctx.scenes.length ? [{ sev: 'info', msg: 'Set your slot length: the runtime check needs it.', fix: 'Answer "How long is your slot?" in the brief.', vars: {} }] : [];
       var dev = Math.abs(ctx.total / 60 - t) / t;
       if (dev <= 0.15) return [];
-      var over = ctx.total / 60 > t;
-      return [{ sev: dev > 0.35 ? 'error' : 'warn', fix: over ? 'Cut a proof scene first.' : 'Add a story, not more text.', vars: { est: minutes(ctx.total), target: t } }];
+      var over = ctx.total / 60 > t, fix = RUN_UNDER;
+      if (over) {
+        var b = cuttable(ctx);
+        fix = b ? 'Cut a scene from the ' + b.label.toLowerCase() + ' beat first.' : ctx.beats ? RUN_TIGHT : 'Cut a scene, or say less in each: your notes are timed at about 140 words a minute.';
+      }
+      return [{ sev: dev > 0.35 ? 'error' : 'warn', fix: fix, vars: { est: minutes(ctx.total), target: t } }];
     } });
 
   rule({ id: 'pace.flatline', sev: 'warn', area: 'pace',
@@ -531,14 +570,21 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
       return out;
     } });
 
+  // A story token ({brand}, {ask} …) is answered in the interview; any other {…} is a prompt for the author ({opening line},
+  // {a big number}: AMEND-10) and has no interview question, so the fix says to write the line, as do lorem and TODO.
+  var STORY_FIX = 'Answer {token} in the interview, or delete the line.';
   rule({ id: 'copy.placeholder', sev: 'error', area: 'copy',
-    msg: 'Scene {i} still has placeholder text.', fix: 'Answer {token} in the interview, or delete the line.',
+    msg: 'Scene {i} still has placeholder text.', fix: 'Replace {token} with your own words, or delete the line.',
     check: function (ctx) {
       var out = [];
       ctx.scenes.forEach(function (s) {
         for (var j = 0; j < s.texts.length; j++) {
           var token = copy.placeholderIn(s.texts[j].str);
-          if (token) { out.push({ scene: s.i, step: s.texts[j].step, vars: { token: token } }); break; }
+          if (token) {
+            var f = { scene: s.i, step: s.texts[j].step, vars: { token: token } };
+            if (copy.isStoryToken(token)) f.fix = STORY_FIX;
+            out.push(f); break;
+          }
         }
       });
       return out;
@@ -575,8 +621,10 @@ PD.module('story/lint', ['story/copy', 'story/frameworks', 'story/timing', 'core
       return out;
     } });
 
+  // the fix says what the runtime does with notes (§6.6): it times them as the words you say, so "add one cue" (the old fix)
+  // turned a 45-second scene into a 3-second one and pace.runtime into an error
   rule({ id: 'copy.notes', sev: 'warn', area: 'copy',
-    msg: 'Scene {i} has no speaker notes.', fix: 'Add one cue: what you say, or where to pause.',
+    msg: 'Scene {i} has no speaker notes.', fix: "Write what you'll say here. The runtime counts these words, about 140 a minute.",
     check: function (ctx) {
       var out = [];
       ctx.scenes.forEach(function (s) { if (s.notesWords < 3) out.push({ scene: s.i, vars: {} }); });

@@ -18,7 +18,8 @@
  *   asset.missing / asset.not-embedded / asset.wrong-type   image elements, world.photoAsset and the theme's font faces
  *   template.unknown, template.expand-failed    (found by PD.compile; repeated here so one call tells the whole story)
  *   template.requires-world     the template needs a world the deck does not enable
- *   template.prop-required / template.prop-type / template.prop-max   a template scene's props against T.props
+ *   template.prop-required / template.prop-type / template.prop-max   a template scene's props against T.props (a
+ *                               required number that holds one storyboard prompt, '{number}', is left to the Director)
  *   text.overflow               measured wider than maxWidth, or the block leaves the 1920 x 1080 frame     (warn)
  *   particles.budget            estimated targets in one state: warn above 8000, error above 9000 (Field.MAX)
  *   steps.remove-unknown        a step removes an id that nothing visible has                              (warn)
@@ -50,6 +51,7 @@ PD.module('core/validate', ['core/util', 'core/text', 'core/compile'], function 
     match: ['angle']
   };
   var WARN_AT = 8000, ERROR_AT = 9000;                    // spec §4.3 particles.budget; ERROR_AT is Field.MAX
+  var PROMPT = /^\s*\{[^{}]{1,40}\}\s*$/;                 // a whole value that is one storyboard placeholder (PD.story.PLACEHOLDER)
 
   /* world parameter ownership (core/stage.js adds PD.world.owner; without it the registry is scanned) */
   function ownerOf(param) {
@@ -188,6 +190,9 @@ PD.module('core/validate', ['core/util', 'core/text', 'core/compile'], function 
           }
           return;
         case 'number':
+          // a storyboard prompt in a required number (big-number's seed value '{number}') is a line still to write, not a
+          // broken setting: the template shows it on stage and the Director reports it as copy.placeholder (AMEND-10)
+          if (ps.required && typeof v === 'string' && PROMPT.test(v)) return;
           if (typeof v !== 'number' || !isFinite(v)) return add('error', 'template.prop-type', '"' + label + '" should be a number, not ' + typeOf(v) + '.', { path: path });
           if ((ps.min != null && v < ps.min) || (ps.max != null && v > ps.max))
             add('warn', 'template.prop-max', '"' + label + '" is ' + v + ', outside ' + (ps.min != null ? ps.min : 'any') + ' to ' + (ps.max != null ? ps.max : 'any') + '.', { path: path });

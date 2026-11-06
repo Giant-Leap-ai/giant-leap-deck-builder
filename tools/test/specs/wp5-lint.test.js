@@ -55,7 +55,7 @@ T.test('lint (calibration, acceptance #1): OGL on the harness engine has 0 error
     var infos = sim.findings.filter(function (f) { return f.sev === 'info'; }).map(function (f) { return f.id; });
     a.deepEqual(infos, ['pace.runtime'], 'the only tip is "set your slot length" (targetMin is null)');
     a.equal(sim.score, 94);
-    a.equal(sim.summary, '0 to fix, 1 to consider, 1 tips.');
+    a.equal(sim.summary, '0 to fix, 1 to consider, 1 tip.', 'one tip, in the singular (open item b)');
   });
 }, { timeout: 60000 });
 
@@ -116,10 +116,23 @@ wp5Each('lint story rules: each has a positive and a negative fixture', function
     var scrub = function (t) { t.str = 'Hello friend'; };
     ['box', 'next', 'thanks'].forEach(function (id) { var s = wp5Sc(src, id); s.text.forEach(scrub); (s.steps || []).forEach(function (st) { (st.text || []).forEach(scrub); }); }); },
     check: function (h) { a.ok(h[0].fix.indexOf('Augmentation, not automation') > 0, 'fix names the short idea: ' + h[0].fix); } });
-  // §6.7 reads "on-screen text with pos >= .75": a final scene so long that its own midpoint falls before that leaves no scene in the
-  // window, and an echo in it does not count (OGL's finale says "Making work more human", an echo, at pos .65 here)
-  wp5Case(K, a, { id: 'story.idea-echo', sev: 'warn', pos: function (src) { thanks(src).dwell = 400; },
-    check: function (h) { a.ok(h[0].fix.indexOf('Augmentation, not automation') > 0); } });
+  // §6.7 reads "on-screen text with pos >= .75", and the fix says "the last two scenes": those count whatever their pos. A final
+  // scene so long that its own midpoint falls at .65 still ends on OGL's "Making work more human", an echo (it used to be reported,
+  // as was the review's idea on the subtitle of scene 5 of 6 at pos .745)
+  wp5None(K, a, 'story.idea-echo', function (src) { thanks(src).dwell = 400; }, 'the last scene counts at any pos');
+  wp5None(K, a, 'story.idea-echo', function (src) { thanks(src).text.forEach(function (t) { t.str = 'Hello friend'; }); wp5Sc(src, 'next').dwell = 400; }, 'so does the one before it');
+  // the six-word version counts as the idea: the fix tells the author to bring it back, so doing that clears the warning, even when
+  // it shares no words with the big idea ("Listen first, build second" for "Your next customer is already telling you what to build")
+  var para = function (src) {
+    src.meta.story.bigIdea = 'Your next customer is already telling you what to build.'; src.meta.story.shortIdea = 'Listen first, build second';
+    var scrub = function (t) { t.str = 'Hello friend'; };
+    src.scenes.forEach(function (s) { (s.text || []).forEach(scrub); (s.steps || []).forEach(function (st) { (st.text || []).forEach(scrub); }); s.notes = 'Hello there friend.'; });
+  };
+  var echoFix = wp5Lint(K, a, para);
+  a.equal(wp5Find(echoFix, 'story.idea-echo')[0].fix, "Bring 'Listen first, build second' back in the last two scenes.");
+  a.equal(wp5Find(echoFix, 'story.idea-early').length, 1);
+  var followed = wp5Lint(K, a, function (src) { para(src); thanks(src).text[1].str = 'Listen first, build second'; src.scenes[0].text[0].str = 'Listen first, build second'; });
+  a.equal(wp5Find(followed, 'story.idea-echo').length + wp5Find(followed, 'story.idea-early').length, 0, 'following the fix clears both');
   wp5Case(K, a, { id: 'story.turns', sev: 'error', pos: function (src) { src.scenes.splice(8, 1); }, check: function (h) { a.equal(h[0].vars.n, 0); } });
   var two = wp5Case(K, a, { id: 'story.turns', sev: 'warn', pos: function (src) { var n = wp5Clone(wp5Sc(src, 'next')); n.id = 'next-2'; n.energy = 4; src.scenes.splice(9, 0, n); } });
   a.equal(wp5Find(two, 'story.turns')[0].msg, 'Your story has 2 turning points. This arc wants 1.');
@@ -128,10 +141,13 @@ wp5Each('lint story rules: each has a positive and a negative fixture', function
   var cta = wp5Case(K, a, { id: 'story.cta', sev: 'warn', pos: function () { },
     neg: function (src) { src.meta.story.ask = 'Book a pilot'; thanks(src).text[1].str = 'Book a pilot'; } });
   a.equal(cta.ready, true, 'a warning never blocks');
-  a.equal(wp5Find(cta, 'story.cta')[0].fix, 'Put your ask on screen in the final beat. Start with a verb: Book, Try, Pick.', 'no ask given: no invented example');
-  a.equal(wp5Find(wp5Lint(K, a, function (src) { src.meta.story.ask = 'Book a pilot'; }), 'story.cta')[0].fix, "Put 'Book a pilot' on screen in the final beat, or at least in its notes.");
+  a.equal(wp5Find(cta, 'story.cta')[0].fix, 'Put your ask on screen in the callback beat. Start with a verb: Book, Try, Pick.', 'no ask given: no invented example');
+  a.equal(wp5Find(wp5Lint(K, a, function (src) { src.meta.story.ask = 'Book a pilot'; }), 'story.cta')[0].fix, "Put 'Book a pilot' on screen in the callback beat, or at least in its notes.", 'the fix names the beat with the cta role');
   wp5Case(K, a, { id: 'story.cta', pos: function () { }, neg: function (src) { thanks(src).notes = 'Book a pilot with me after the talk.'; } });
   wp5Case(K, a, { id: 'story.cta', pos: function (src) { src.meta.story.ask = 'Book a pilot'; }, neg: function (src) { src.meta.story.ask = 'Book a pilot'; thanks(src).notes = 'Please book a pilot with me.'; } });
+  // an unanswered {ask} on the finale is a placeholder, not a clear ask ("ask" is a verb of the list, and it used to count)
+  wp5Case(K, a, { id: 'story.cta', pos: function (src) { thanks(src).text[1].str = '{ask}'; }, neg: function (src) { thanks(src).text[1].str = 'Ask us anything'; } });
+  wp5Case(K, a, { id: 'story.cta', pos: function (src) { thanks(src).text[1].str = '{your line}'; }, neg: function (src) { thanks(src).text[1].str = 'Approve the pilot by Friday'; } });
   wp5Case(K, a, { id: 'story.thanks-ending', sev: 'info', scene: 9, pos: function (src) { thanks(src).text[0].str = 'Thank you'; } });
   wp5Case(K, a, { id: 'story.bookend', sev: 'info', scene: 9, pos: function (src) { thanks(src).text[0].str = 'Goodbye'; } });
   // the opening is the first half: "Outside" is the hero of the box scene (scene 8 of 10), so repeating it is not a call back to the opening
@@ -155,11 +171,19 @@ wp5Each('lint story rules: each has a positive and a negative fixture', function
 wp5Each('lint pace rules: each has a positive and a negative fixture', function (a, K) {
   var low = function (src) { src.meta.story.targetMin = 3; };
   var run = wp5Case(K, a, { id: 'pace.runtime', sev: 'error', pos: function (src) { src.meta.story.targetMin = 10; }, neg: low,
-    check: function (h) { a.equal(h[0].msg, 'This runs about 2.9 min in a 10-min slot.'); a.equal(h[0].fix, 'Add a story, not more text.'); } });
+    check: function (h) { a.equal(h[0].msg, 'This runs about 2.9 min in a 10-min slot.'); a.equal(h[0].fix, "Write out what you'll say in each scene's notes: they're timed at about 140 words a minute. Or add a scene with a story."); } });
   var warn = wp5Lint(K, a, function (src) { src.meta.story.targetMin = 3.5; });
   a.equal(wp5Find(warn, 'pace.runtime')[0].sev, 'warn', '17% off is a warning'); a.ok(warn.counts.warn === 2);
   var over = wp5Lint(K, a, function (src) { src.meta.story.targetMin = 1; });
-  a.equal(wp5Find(over, 'pace.runtime')[0].sev, 'error'); a.equal(wp5Find(over, 'pace.runtime')[0].fix, 'Cut a proof scene first.');
+  a.equal(wp5Find(over, 'pace.runtime')[0].sev, 'error');
+  // the fix names a beat that can lose a scene without emptying it (story.beats-missing never follows): a proof beat with a spare
+  // scene first, then an optional beat, then any. OGL's one pattern scene is its proof beat's only one; zoom-out is optional
+  a.equal(wp5Find(over, 'pace.runtime')[0].fix, 'Cut a scene from the zoom out beat first.');
+  var proofSpare = wp5Lint(K, a, function (src) { src.meta.story.targetMin = 1; var l = wp5Clone(wp5Sc(src, 'leaps')); l.id = 'leaps-2'; src.scenes.splice(7, 0, l); });
+  a.equal(wp5Find(proofSpare, 'pace.runtime')[0].fix, 'Cut a scene from the pattern beat first.');
+  var tight = wp5Lint(K, a, function (src) { src.meta.story.targetMin = 1; src.scenes = src.scenes.filter(function (s) { return s.id !== 'warp' && s.id !== 'home'; }); });
+  a.equal(wp5Find(tight, 'pace.runtime')[0].fix, 'Every beat is down to its last scene, so say less in each: your notes are timed at about 140 words a minute. Or pick a shorter shape.');
+  a.equal(wp5Find(tight, 'story.beats-missing').length, 0, 'every beat still has its scene');
   var unknown = wp5Lint(K, a, function (src) { src.meta.story.targetMin = null; });
   a.equal(wp5Find(unknown, 'pace.runtime')[0].sev, 'info'); a.ok(/slot length/.test(wp5Find(unknown, 'pace.runtime')[0].msg));
   wp5Case(K, a, { id: 'pace.flatline', sev: 'warn', scene: 4, pos: function (src) { [2, 4, 5, 4, 3, 3, 3, 3, 5, 4].forEach(function (e, i) { src.scenes[i].energy = e; }); },
@@ -194,16 +218,22 @@ wp5Each('lint copy rules: each has a positive and a negative fixture', function 
   wp5Case(K, a, { id: 'copy.small', pos: function (src) { src.scenes[0].text.push({ str: 'one two three four five six', style: 'caption', y: 900 }); }, neg: function (src) { src.scenes[0].text.push({ str: 'one two three four five', style: 'caption', y: 900 }); } });
   wp5Case(K, a, { id: 'copy.one-hero', sev: 'warn', scene: 1, pos: function (src) { wp5Sc(src, 'title').text.push({ str: 'And more', style: 'hero', y: 800 }); } });
   wp5Case(K, a, { id: 'copy.placeholder', sev: 'error', scene: 0, pos: function (src) { src.scenes[0].text[0].str = '{opening line}'; },
-    check: function (h) { a.equal(h[0].vars.token, '{opening line}'); a.equal(h[0].fix, 'Answer {opening line} in the interview, or delete the line.'); } });
-  wp5Case(K, a, { id: 'copy.placeholder', sev: 'error', pos: function (src) { src.scenes[1].text[1].str = 'Lorem ipsum dolor'; } });
+    check: function (h) { a.equal(h[0].vars.token, '{opening line}'); a.equal(h[0].fix, 'Replace {opening line} with your own words, or delete the line.', 'an author prompt has no interview question (AMEND-10)'); } });
+  wp5Case(K, a, { id: 'copy.placeholder', sev: 'error', scene: 1, pos: function (src) { src.scenes[1].text[1].str = '{tagline}'; },
+    check: function (h) { a.equal(h[0].fix, 'Answer {tagline} in the interview, or delete the line.', 'a story token is answered in the interview'); } });
+  wp5Case(K, a, { id: 'copy.placeholder', sev: 'error', pos: function (src) { src.scenes[1].text[1].str = 'Lorem ipsum dolor'; },
+    check: function (h) { a.equal(h[0].fix, 'Replace Lorem with your own words, or delete the line.'); } });
   wp5Case(K, a, { id: 'copy.placeholder', sev: 'error', pos: function (src) { src.scenes[1].text[1].str = 'TODO tagline'; } });
+  wp5None(K, a, 'copy.placeholder', function (src) { src.scenes[1].text[1].str = 'Join us on Mastodon'; }, '"todo" inside a word is copy, not a placeholder');
   wp5Case(K, a, { id: 'copy.jargon', sev: 'info', scene: 0, pos: function (src) { src.scenes[0].text.push({ str: 'We leverage a seamless approach', style: 'subtitle', y: 900 }); },
     check: function (h) { a.deepEqual(h.map(function (f) { return f.vars.word; }), ['leverage', 'seamless']); } });
   wp5Case(K, a, { id: 'copy.over-sun', sev: 'warn', scene: 5, pos: function (src) { wp5Sc(src, 'sunrise').text.push({ str: 'In the glare', style: 'subtitle', x: 1330, y: 700 }); },
     check: function (h) { a.equal(h[0].msg, '"In the glare" sits in the sun\'s glare.'); } });
   wp5None(K, a, 'copy.over-sun', function (src) { wp5Sc(src, 'spark').text.push({ str: 'No sun here', style: 'subtitle', x: 1330, y: 700 }); }, 'the spark scene has no sun');
   wp5None(K, a, 'copy.over-sun', function (src) { wp5Sc(src, 'sunrise').text.push({ str: 'Far from the sun', style: 'subtitle', x: 600, y: 600 }); }, 'more than 200 px from the sun');
-  wp5Case(K, a, { id: 'copy.notes', sev: 'warn', scene: 0, pos: function (src) { delete src.scenes[0].notes; } });
+  wp5Case(K, a, { id: 'copy.notes', sev: 'warn', scene: 0, pos: function (src) { delete src.scenes[0].notes; },
+    // the fix says what §6.6 does with notes (the words you say, 140 a minute), so following it does not collapse the runtime
+    check: function (h) { a.equal(h[0].fix, "Write what you'll say here. The runtime counts these words, about 140 a minute."); } });
   wp5Case(K, a, { id: 'copy.notes', pos: function (src) { src.scenes[0].notes = 'two words'; }, neg: function (src) { src.scenes[0].notes = 'now three words'; } });
   wp5Case(K, a, { id: 'copy.notes', pos: function (src) { src.scenes[0].notes = '▸ What is the spark?'; } });   // a prompt is not a note
   wp5None(K, a, 'copy.notes', function (src) { src.scenes[0].notes = ''; src.scenes[0].steps = [{ notes: 'a note on a step' }]; }, 'three words anywhere in the scene count');
@@ -297,7 +327,7 @@ T.test('lint: score = max(0, 100 - 15E - 5W - 1I); ready means no errors; findin
     r.findings.forEach(function (f) { a.ok(rank[f.sev] >= last, 'sorted by severity'); last = rank[f.sev]; });
     var errs = r.findings.filter(function (f) { return f.sev === 'error'; });
     a.equal(errs[0].scene, undefined, 'deck-level findings first inside a group');
-    a.equal(r.summary, c.error + ' to fix, ' + c.warn + ' to consider, ' + c.info + ' tips.');
+    a.equal(r.summary, c.error + ' to fix, ' + c.warn + ' to consider, ' + c.info + (c.info === 1 ? ' tip.' : ' tips.'));
     // many errors cannot push the score below zero
     var bad = wp5Lint(K, a, function (src) { src.scenes.forEach(function (s) { s.text.push({ str: '{x}', style: 'caption', y: 900 }); }); });
     a.equal(bad.score, 0); a.ok(bad.counts.error >= 10);
@@ -412,6 +442,18 @@ wp5Each('lint: runs in under 150 ms for a 24-scene deck, excluding timing (accep
   a.ok(warm < 50, 'warm: ' + warm.toFixed(1) + ' ms');
   a.deepEqual(r.ruleErrors, [], JSON.stringify(r.ruleErrors));
   a.ok(r.findings.length > 5, 'and it found things: ' + r.findings.length);
+  // a realistic deck as well: One Giant Leap's 10 scenes (18 particle lines, worlds, steps) and 14 storyboard scenes, measured
+  // cold again (caches cleared, fresh spec objects). Timing-sensitive: under heavy machine load re-run this test on its own.
+  var real = wp5Clone(K.compile('one-giant-leap').source);
+  real.id = 'wp5-perf-real';
+  real.scenes = real.scenes.concat(K.story.board(wp5Story({ framework: 'giant-leap', targetMin: 20 }), { theme: 'cosmos' }).slice(0, 14)
+    .map(function (s, i) { s.id = 'board-' + i; return s; }));
+  a.equal(real.scenes.length, 24);
+  K.story.lint.clearCache();
+  var c2 = K.compile(real);
+  t0 = performance.now(); var r2 = K.story.lint(c2), cold2 = performance.now() - t0;
+  a.ok(cold2 < 150, 'cold, One Giant Leap + storyboard scenes: ' + cold2.toFixed(1) + ' ms');
+  a.deepEqual(r2.ruleErrors, [], JSON.stringify(r2.ruleErrors));
 });
 
 /* ------------------------------------------------------------------ integration (WP3 elements x WP5 lint) */

@@ -257,12 +257,22 @@ PD.module('studio/ui/inspector', [], function (PD) {
 
     function notesSection(inf, readOnly) {
       var src = inf.src, cs = inf.cs, steps = inf.steps, wrap = [];
-      var T = inf.T, talk = T && T.story ? (T.story.talkSec || 20) : 20, noSpeech = true;
+      var T = inf.T, talk = T && T.story ? (T.story.talkSec || 20) : 20, vals = [];
+      // the line above the fields follows what is written: "no notes yet" only while nothing counts as speech, with a word on the
+      // ▸ prompts when there are any (they are questions for the speaker: never read out, counted or timed)
+      var help = h('div', { class: 'pdx-help' });
+      function paintHelp() {
+        var spoken = vals.some(function (v) { return !!S.speech(v); }), prompts = vals.some(function (v) { return /(^|\n)\s*\u25b8/.test(v); });
+        var t = spoken ? '' : 'No notes yet, so the timer assumes about ' + talk + ' s of talking for this scene. Write what you will say and it counts real words at 140 a minute.';
+        if (prompts && !spoken) t += ' Lines that start with \u25b8 are prompts for you: they are not counted, timed or shown in Rehearse. Write your words on the lines below them.';
+        help.textContent = t;
+        help.style.display = t ? '' : 'none';
+      }
       for (var k = 0; k <= steps; k++) {
         (function (k2) {
           var val = k2 === 0 ? (src.notes != null ? src.notes : cs.notes) : ((src.stepNotes || [])[k2 - 1] != null ? src.stepNotes[k2 - 1] : ((cs.steps || [])[k2 - 1] || {}).notes);
           val = val == null ? '' : String(val);
-          if (S.speech(val)) noSpeech = false;
+          vals[k2] = val;
           var label = k2 === 0 ? (steps ? 'Opening' : 'What you say') : 'After click ' + k2;
           var time = h('span', { class: 't' });
           function setTime(v) { var sec = f.speakSecs(v); time.textContent = (S.words(S.speech(v))) + ' words · ' + (sec ? '≈ ' + f.fmtSecs(sec) : 'not yet'); }
@@ -271,7 +281,7 @@ PD.module('studio/ui/inspector', [], function (PD) {
           var el;
           if (readOnly) el = h('div', { class: 'txt' + (val ? '' : ' is-empty'), text: val || 'No notes for this state.' });
           else {
-            var ar = f.hlArea({ value: val, prompts: true, placeholder: 'What will you say here?', label: label, onInput: function (v) { setTime(v); queue('notes', k2, v, false); }, onBlur: function () { flush(); } });
+            var ar = f.hlArea({ value: val, prompts: true, placeholder: 'What will you say here?', label: label, onInput: function (v) { setTime(v); vals[k2] = v; paintHelp(); queue('notes', k2, v, false); }, onBlur: function () { flush(); } });
             ar.input.rows = 2; el = ar.el;
           }
           var kids = [hd, el];
@@ -285,7 +295,7 @@ PD.module('studio/ui/inspector', [], function (PD) {
           wrap.push(h('div', { class: 'in-note', dataset: { state: k2 } }, kids));
         })(k);
       }
-      if (noSpeech && !readOnly) wrap.unshift(h('div', { class: 'pdx-help', text: 'No notes yet, so the timer assumes about ' + talk + ' s of talking for this scene. Write what you will say and it counts real words at 140 a minute.' }));
+      if (!readOnly) { paintHelp(); wrap.unshift(help); }
       return section('Notes · what you say', wrap);
     }
 

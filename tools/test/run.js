@@ -3,7 +3,8 @@
  *
  *   node tools/test/run.js [--grep re] [--headed] [--spec file]... [--timeout ms]
  *
- * Generates tools/test/.harness.html from harness.tpl.html with this load order, each group
+ * Generates tools/test/.harness-<pid>.html from harness.tpl.html (one file per run, so runs in parallel never load each
+ * other's spec set; deleted when the run ends; git-ignored by tools/test/.gitignore) with this load order, each group
  * alphabetical:
  *   1. engine/pixeldeck.js (when it exists; its document.write loader pulls in the engine modules)
  *   2. themes/*\/theme.js   3. decks/*\/theme.js   4. decks/*\/assets.js   5. decks/*\/deck.js
@@ -24,7 +25,7 @@ const path = require('path'), fs = require('fs'), url = require('url');
 const G = require('../regression/golden.js');
 
 const ROOT = G.ROOT, TEST_DIR = __dirname;
-const HARNESS = path.join(TEST_DIR, '.harness.html');
+const HARNESS = path.join(TEST_DIR, '.harness-' + process.pid + '.html');   // per run: concurrent runs must not share it
 
 function sub(dir, name) {          // <dir>/*/<name>, alphabetical by folder
   const d = path.join(ROOT, dir);
@@ -112,7 +113,7 @@ async function main() {
     }
     for (const m of consoleErrors) console.log('# console.error: ' + m);
     await ctx.close();
-  } finally { await browser.close(); }
+  } finally { await browser.close(); try { fs.unlinkSync(HARNESS); } catch (e) { /* already gone */ } }
 
   loadErrors.forEach((e, i) => {
     failed++;

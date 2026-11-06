@@ -146,7 +146,7 @@ module.exports = {
       // the other hints: a long turn, a command that is not a verb, a short idea that is not short
       await page.click('.pds-dot >> nth=5');
       await page.fill('[data-field=oldWay]', 'one two three four five six');
-      a.ok(/Try five words or fewer/.test(await page.locator('.pds-hint').textContent()), 'turn: more than 5 words');
+      a.ok(/won't fit the big type\. Try two or three words/.test(await page.locator('.pds-hint').textContent()), 'turn: more than the pivot\'s hero line holds');
       await page.fill('[data-field=oldWay]', '');
       await page.click('.pds-dot >> nth=6');
       await page.fill('[data-field=ask]', 'Maybe think about it');
@@ -189,10 +189,20 @@ module.exports = {
       await page.click('.pds-next');                                        // Next: Storyboard
       await page.waitForFunction(() => PD.studio.store.route() === 'board');
       await page.waitForTimeout(1500);
+      // the words are the engine's (PD.story.interview.logline decides the capitals of the answers it sets mid-sentence)
       const line = await page.locator('.pds-logline').textContent();
-      a.ok(/^\W*For Ops leaders who see AI as a way to cut headcount, this talk shows Augmentation, not automation, so they/.test(line), 'the logline: ' + line);
+      const want = await store(page, () => PD.story.interview.logline(PD.studio.store.get().deck.meta.story));
+      a.equal(line.trim(), want, 'the header shows the logline of the story');
+      a.ok(/^\W*For ops leaders who see AI as a way to cut headcount, this talk shows augmentation, not automation, so they pilot/i.test(line), 'built from the answers: ' + line);
       a.equal(await page.locator('.pds-logline').isVisible(), true);
       await page.screenshot({ path: shot(ctx, 'wp6-04-board.png') });
+      // Shape's footer says "a 10-minute slot" but "an 8-minute slot" and "an 11-minute slot"
+      for (const [min, art] of [[10, 'a'], [8, 'an'], [11, 'an'], [18, 'an'], [25, 'a']]) {
+        await store(page, m => { PD.studio.store.answer('targetMin', m); PD.studio.nav('brief'); PD.studio.nav('shape'); }, min);
+        await page.waitForSelector('.pds-plan');
+        const plan = await page.locator('.pds-plan').textContent();
+        a.ok(new RegExp(' for ' + art + ' ' + min + '-minute slot').test(plan), min + ' minutes: ' + plan);
+      }
       a.deepEqual(realErrors(w), [], 'no console errors');
       a.deepEqual(w.pageErrors, [], 'no page errors');
     })();
@@ -437,10 +447,25 @@ module.exports = {
       a.ok(/Read-only/.test(await p2.locator('.pds-status').textContent()), 'the status says so too');
       await p2.screenshot({ path: shot(ctx, 'wp6-07-readonly-tab.png') });
       a.equal(await page.evaluate(() => PD.studio.store.get().studio.readOnly), false, 'the first tab keeps editing');
-      // take over: the first tab becomes the read-only one
+      // the first tab goes on working after the second opened; its last edit is still waiting for the autosave
+      await page.evaluate(() => PD.studio.store.commit('Rename', d => { d.deck.meta.title = 'Edited in tab one'; }, { merge: false }));
+      await page.waitForFunction(() => PD.studio.store.saveState().state === 'saved', null, { timeout: 5000 });
+      await page.evaluate(() => PD.studio.store.commit('Words', d => { d.deck.scenes[0].point = 'tab one point'; }));
+      a.equal(await p2.evaluate(() => PD.studio.store.get().deck.meta.title), ANSWERS.brand, 'the read-only tab still shows what it opened with');
+      // take over: the first tab saves and becomes the read-only one; the second reads the deck again before it edits
       await p2.click('.pds-banner button');
       await page.waitForFunction(() => PD.studio.store.get().studio.readOnly === true, null, { timeout: 5000 });
-      a.equal(await p2.evaluate(() => PD.studio.store.get().studio.readOnly), false, 'the new tab can edit');
+      await p2.waitForFunction(() => PD.studio.store.get().studio.readOnly === false && PD.studio.store.get().deck.meta.title === 'Edited in tab one', null, { timeout: 5000 });
+      const t2 = await p2.evaluate(() => { const p = PD.studio.store.get(); return { title: p.deck.meta.title, p0: p.deck.scenes[0].point, route: PD.studio.store.route(), lock: !!p.studio.lockedByOther }; });
+      a.deepEqual(t2, { title: 'Edited in tab one', p0: 'tab one point', route: 'board', lock: false }, 'the new tab has every edit of the first, even the one not yet autosaved, and stays on its step');
+      a.equal(await p2.locator('.pds-banner').count(), 0, 'and its read-only banner is gone');
+      a.ok(/Open in another tab\./.test(await page.locator('.pds-banner').first().textContent()), 'the first tab now says it is open elsewhere');
+      // an edit in the new tab is written on top of the first tab's work, not over it
+      await p2.evaluate(() => PD.studio.store.commit('Words', d => { d.deck.scenes[1].point = 'tab two point'; }));
+      await p2.waitForFunction(() => PD.studio.store.saveState().state === 'saved', null, { timeout: 5000 });
+      const stored = await p2.evaluate(() => { const p = JSON.parse(localStorage.getItem('pdstudio:v1:proj:' + PD.studio.store.get().id)); return { title: p.deck.meta.title, p0: p.deck.scenes[0].point, p1: p.deck.scenes[1].point }; });
+      a.deepEqual(stored, { title: 'Edited in tab one', p0: 'tab one point', p1: 'tab two point' }, 'storage holds both tabs\' work');
+      a.equal(await page.evaluate(() => PD.studio.store.commit('Late', d => { d.deck.meta.title = 'late'; })), false, 'the first tab can no longer write');
     })();
   },
 
@@ -482,6 +507,16 @@ module.exports = {
       const r = await store(page, () => ({ assets: Object.keys(PD.studio.store.get().assets).sort(), bf: PD.studio.store.brandFont() }));
       a.deepEqual(r.assets, ['logo-mark', 'team-photo', 'zebra-brand-test'], 'every file in the drop was added exactly once');
       a.equal(r.bf.family, 'Zebra Brand Test', 'and the font in it is the brand font');
+      // the same font dropped again (after going back to the theme font) is the brand font again, and is not stored twice
+      await page.click('[data-act=font-clear]');
+      await page.waitForFunction(() => !PD.studio.store.brandFont());
+      await dropFiles(page, [fontDrop(ctx)], '.pds-look-head');
+      await page.waitForFunction(() => PD.studio.store.brandFont(), null, { timeout: 15000 });
+      await page.waitForTimeout(300);
+      const r2 = await store(page, () => ({ assets: Object.keys(PD.studio.store.get().assets).sort(), bf: PD.studio.store.brandFont(), faces: PD.studio.store.get().deck.meta.themePatch.fontFaces }));
+      a.deepEqual(r2.assets, ['logo-mark', 'team-photo', 'zebra-brand-test'], 'no second copy of the font: ' + r2.assets.join(', '));
+      a.deepEqual(r2.bf, { asset: 'zebra-brand-test', family: 'Zebra Brand Test' }, 'the asset the deck already had is the brand font');
+      a.equal(r2.faces.length, 1);
       a.ok(/Drop a font to make it your brand font/.test(await page.locator('.pds-drop-card').textContent()), 'the drop overlay says what a drop does on this screen');
       await page.click('[data-step=board]');
       await page.waitForFunction(() => PD.studio.store.route() === 'board');
@@ -666,7 +701,7 @@ module.exports = {
       await page.waitForFunction(() => Object.keys(PD.studio.store.get().assets).length === 1);
       await page.click('[data-step=export]');
       await page.waitForSelector('[data-act=source-deck]');
-      const id = await store(page, () => PD.studio.store.get().deck.id);
+      const id = 'northwind';      // the source files are named after the folder they go in (decks/northwind/), not the project's own id
       const dir = path.join(ctx.tmp, 'srcdeck'); fs.mkdirSync(dir);
       for (const [act, name] of [['source-deck', 'deck.js'], ['source-assets', 'assets.js']]) {
         const dl = page.waitForEvent('download');

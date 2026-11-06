@@ -19,7 +19,8 @@ PD.module('studio/screens/brief', ['studio/app'], function (PD, app) {
     audience: 'Ops leaders who see AI as a way to cut headcount', bigIdea: 'The next leap is augmentation, not automation',
     shortIdea: 'Augmentation, not automation', ask: 'Pilot one human-centred use case', brand: 'Your name or company', tagline: 'A short tagline'
   };
-  var PROOF_HOLD = { number: 'What the number means', quote: 'What they said', story: 'The moment, in a sentence', demo: 'What you will show' };
+  // the number's unit goes in its words: "% of hours" shows 62%, "days to ship" shows 9 (the board puts no unit nobody gave)
+  var PROOF_HOLD = { number: 'What it counts: % of hours, days to ship', quote: 'What they said', story: 'The moment, in a sentence', demo: 'What you will show' };
 
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 
@@ -117,7 +118,8 @@ PD.module('studio/screens/brief', ['studio/app'], function (PD, app) {
           Array.prototype.forEach.call(chips.children, function (b) { b.classList.toggle('on', +b.getAttribute('data-min') === t); b.setAttribute('aria-pressed', String(+b.getAttribute('data-min') === t)); });
         }
         q.input.chips.forEach(function (m) {
-          chips.appendChild(h('button', { class: 'pds-chip-btn', type: 'button', 'data-min': String(m), disabled: readOnly() ? true : null, onclick: function () { inp.value = String(m); answer(q, m); paintNote(); } }, [m + ' min']));
+          // the chip hands the focus back to the number, so Enter (the ↵ on Next) moves on as it does on every other question
+          chips.appendChild(h('button', { class: 'pds-chip-btn', type: 'button', 'data-min': String(m), disabled: readOnly() ? true : null, onclick: function () { inp.value = String(m); answer(q, m); paintNote(); inp.focus({ preventScroll: true }); } }, [m + ' min']));
         });
         inp.addEventListener('input', function () { answer(q, inp.value); paintNote(); });
         inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); next(); } });

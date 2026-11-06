@@ -419,7 +419,7 @@ function (PD, persist, files, store, copy, fws, interview) {
     var show = !!p && !!line && route !== 'welcome' && route !== 'brief';
     el.logline.hidden = !show;
     el.logline.textContent = '';
-    if (show) el.logline.appendChild(h('span', { class: 'pds-logline-text' }, [line]));
+    if (show) el.logline.appendChild(h('span', { class: 'pds-logline-text', title: line }, [line]));
   }
   function renderLocks() {
     var p = store.get();
@@ -429,13 +429,38 @@ function (PD, persist, files, store, copy, fws, interview) {
     if (p.studio.lockedByOther) {
       banner('Open in another tab. This tab is read-only, so the two cannot overwrite each other.', 'warn', {
         key: 'lock', sticky: true,
-        actions: [{ label: 'Take over here', close: false, onClick: function () { if (currentLock) currentLock.takeOver(); store.patchStudio({ lockedByOther: false }); store.setReadOnly(false); renderChrome(); } }]
+        actions: [{ label: 'Take over here', close: false, onClick: takeOver }]
       });
     } else if (p.studio.sample === 'ogl') {
       banner('One Giant Leap is a read-only sample: look around, rehearse it, or start from a copy you can edit.', 'info', {
         key: 'readonly', sticky: true, actions: [{ label: 'Make an editable copy', onClick: function () { openSample('replica'); } }]
       });
     }
+  }
+  // "Take over here": the other tab saves what it has and lets go, then this tab reads the project again from storage. Its own
+  // copy is as old as the moment it opened, so editing that copy would write over everything the other tab did since.
+  var takingOver = false;
+  function takeOver() {
+    var p = store.get(), lk = currentLock;
+    if (!p || !p.studio.lockedByOther || takingOver) return Promise.resolve(false);
+    takingOver = true;
+    var id = p.id, route = store.route(), sel = p.studio.selected;
+    return Promise.resolve(lk ? lk.takeOver() : null).then(function () {
+      if (currentLock !== lk || !store.get() || store.get().id !== id) return false;          // the deck was closed meanwhile
+      var fresh = persist.loadProject(id);
+      if (!fresh) {                               // nothing was ever stored for it: this tab's copy is the only one
+        store.setReadOnly(false); store.patchStudio({ lockedByOther: false }); renderChrome(); renderLocks();
+        return true;
+      }
+      fresh.studio.screen = route;                // stay on the step this tab shows
+      if (sel) fresh.studio.selected = sel;       // (store.open picks the first scene when it is gone)
+      return openProject(fresh, { lock: lk, route: route }).then(function () { return true; });
+    }).then(function (r) { takingOver = false; return r; }, function (e) {
+      takingOver = false;
+      try { console.error('studio: take-over failed', e); } catch (e2) { }
+      toast("Couldn't take the deck over. Close the other tab, then open the deck again.", 'error');
+      return false;
+    });
   }
   function renderChrome() {
     if (!root) return;
@@ -484,7 +509,7 @@ function (PD, persist, files, store, copy, fws, interview) {
       if (done) return;
       done = true;
       var v = input.value.trim();
-      if (ok && v && v !== titleOf(p)) store.commit('Rename', function (d) { d.deck.meta.title = v; d.studio.titleAuto = false; });
+      if (ok && v && v !== titleOf(p)) store.commit('Rename', function (d) { d.deck.meta.title = v; d.studio.titleAuto = false; }, { merge: false });
       renderChrome();
     }
     input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } e.stopPropagation(); });
@@ -505,6 +530,7 @@ function (PD, persist, files, store, copy, fws, interview) {
   function runOpen(p, o) {
     o = o || {};
     return loadAssetsFor(p).then(function () {
+      if (o.lock && o.lock === currentLock) return o.lock;      // a take-over keeps the lock it has just taken
       if (currentLock) { currentLock.release(); currentLock = null; }
       if (p.studio.readOnly || o.noLock) return null;
       return persist.lock(p.id);
@@ -512,8 +538,11 @@ function (PD, persist, files, store, copy, fws, interview) {
       currentLock = lk;
       if (lk && !lk.held) { p.studio.readOnly = true; p.studio.lockedByOther = true; }
       if (lk) lk.onLost(function () {
-        store.patchStudio({ lockedByOther: true });
+        // another tab took over: write the last edits now (the tab that took over reads them as soon as this returns), then
+        // stop writing. Read-only first, so nothing scheduled afterwards can reach storage.
+        store.flush();
         store.setReadOnly(true);
+        store.patchStudio({ lockedByOther: true });
         renderChrome(); renderLocks();
       });
       store.open(p);
@@ -563,6 +592,22 @@ function (PD, persist, files, store, copy, fws, interview) {
     if (c.kind !== 'html') { toast(c.kind === 'unsupported' ? c.message : 'Open a presentation you saved from the Studio (an .html file).', 'error'); return Promise.resolve(null); }
     return files.readPresentation(file).then(function (pres) {
       var deck = pres.deck, hashes = {}, recs = {}, ids = Object.keys(pres.assets);
+      // a deck with a look of its own (a theme.js in its folder, exported with tools/export.js) cannot be shown here: the Studio
+      // never runs code from a file, and it has only its own looks. Say so plainly instead of opening an empty, broken storyboard.
+      var tid = deck.meta && deck.meta.theme;
+      if (tid && PD.theme.has && !PD.theme.has(tid)) {
+        return dialog({
+          title: 'This deck has a look of its own', dismissValue: true,
+          body: 'It uses the look "' + tid + '" from its own theme.js. The Studio can only show its built-in looks (Cosmos and Slate), so it can\u2019t open this deck. Your file is untouched: to change it, edit the deck\u2019s folder (deck.js and theme.js) in a code editor, then export it again.',
+          actions: [{ label: 'OK', value: true, kind: 'primary' }]
+        }).then(function () { return null; });
+      }
+      // the steps the author had been through ride along in the file (the Export screen writes them); they are not part of the deck
+      var carried = deck.meta && deck.meta.studio, visited = {};
+      if (carried) {
+        delete deck.meta.studio;
+        (Array.isArray(carried.visited) ? carried.visited : []).forEach(function (n) { if (RAIL.some(function (r) { return r.name === n; })) visited[n] = 1; });
+      }
       return ids.reduce(function (chain, id) {
         return chain.then(function () {
           var a = pres.assets[id];
@@ -587,7 +632,7 @@ function (PD, persist, files, store, copy, fws, interview) {
           if (choice === 'cancel') return null;
           var d = persist.clone(deck);
           if (choice === 'copy') { d.id = persist.newId(d.meta && d.meta.title || 'copy', persist.index().map(function (e) { return e.id; })); }
-          var p = store.projectFromDeck(d, hashes, { fileName: file.name, screen: d.scenes.length ? 'board' : 'brief' });
+          var p = store.projectFromDeck(d, hashes, { fileName: file.name, screen: d.scenes.length ? 'board' : 'brief', visited: visited });
           return openProject(p, {}).then(function () {
             store.markSaved({ fileName: file.name });
             renderChrome();

@@ -50,6 +50,9 @@ PD.module('studio/screens/rehearse', [], function (PD) {
     '.rh-strip .cap { font: 650 10.5px/1.2 -apple-system, sans-serif; text-transform: uppercase; letter-spacing: .1em; color: #94b0c2; margin-bottom: 6px; display: flex; gap: 8px; }',
     '.rh-strip .cap em { font-style: normal; color: #8396b3; }',
     '.rh-notes .txt { font-size: 18px; line-height: 1.45; max-height: 4.4em; overflow: auto; white-space: pre-wrap; } .rh-notes .txt.is-empty { color: #8396b3; font-style: italic; font-size: 15px; }',
+    // a minute of notes (~140 words) does not fit three lines at 18 px: long notes get smaller type and more lines, and what still
+    // does not fit fades out at the bottom (it scrolls), so the speaker can tell the notes go on instead of reading a cut sentence
+    '.rh-notes .txt.is-long { font-size: 15px; line-height: 1.42; max-height: 7.1em; } .rh-notes .txt.is-clip { -webkit-mask-image: linear-gradient(#000 72%, transparent); mask-image: linear-gradient(#000 72%, transparent); }',
     '.rh-next .t { font-size: 15px; font-weight: 620; } .rh-next .s { color: #94b0c2; font-size: 12.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
     '.rh-clock { text-align: right; min-width: 150px; } .rh-clock .big { font: 700 34px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }',
     '.rh-clock .big.is-over { color: #ffcd75; } .rh-clock small { display: block; margin-top: 6px; font: 500 12px ui-monospace, Menlo, monospace; color: #94b0c2; } .rh-clock small.is-over { color: #ffcd75; }',
@@ -139,6 +142,7 @@ PD.module('studio/screens/rehearse', [], function (PD) {
       var showStrip = prefs.strip !== false;
       function build() {
         noteTxt = h('div', { class: 'txt is-empty', text: 'No notes for this moment.' });
+        noteTxt.addEventListener('scroll', function () { noteTxt.classList.toggle('is-clip', noteTxt.scrollTop + noteTxt.clientHeight < noteTxt.scrollHeight - 2); });
         nextT = h('div', { class: 't' }); nextS = h('div', { class: 's' });
         clockBig = h('div', { class: 'big', text: '0:00' }); clockSmall = h('small'); totBig = h('small');
         strip = h('div', { class: 'rh-strip' + (showStrip ? '' : ' is-off'), dataset: { strip: 'on' } }, [
@@ -160,6 +164,8 @@ PD.module('studio/screens/rehearse', [], function (PD) {
         run0.slide = st.slide; run0.step = st.step;
         var inf = infos[st.slide], nxt = infos[st.slide + 1], text = notesOf(st.slide, st.step);
         noteTxt.textContent = text || 'No notes for this moment.'; noteTxt.classList.toggle('is-empty', !text);
+        noteTxt.classList.toggle('is-long', !!text && text.length > 180); noteTxt.scrollTop = 0;
+        noteTxt.classList.toggle('is-clip', noteTxt.scrollHeight > noteTxt.clientHeight + 2);
         strip.querySelector('.where').textContent = '· scene ' + (st.slide + 1) + ' of ' + infos.length + (inf && inf.steps ? ', click ' + st.step + '/' + inf.steps : '');
         if (nxt) { nextT.textContent = (nxt.beat ? nxt.beat.label + ': ' : '') + nxt.label; nextS.textContent = nxt.firstLine || nxt.point || ''; }
         else { nextT.textContent = 'That is the end.'; nextS.textContent = 'Press Esc to go back and make notes.'; }

@@ -1597,7 +1597,8 @@
     var f = this.o.fill;
     if (Array.isArray(f)) {
       var g = this.o.fillDir === 'h' ? ctx.createLinearGradient(x0, 0, x0 + w, 0) : ctx.createLinearGradient(0, y0, 0, y0 + h);
-      for (var i = 0; i < f.length; i++) g.addColorStop(i / (f.length - 1), COLORS[f[i]] || f[i]);
+      // one stop is a solid colour (0 / 0 is NaN, which addColorStop rejects); as in elements/counter.js
+      for (var i = 0; i < f.length; i++) g.addColorStop(f.length < 2 ? 0 : i / (f.length - 1), COLORS[f[i]] || f[i]);
       return g;
     }
     return COLORS[f] || f;
@@ -2406,6 +2407,16 @@
     warned[key] = 1;
     try { console.warn(msg); } catch (e) { }
   }
+  function errorOnce(msg) {        // a draw failure (Stage.fault), logged once per distinct message
+    if (warned['draw:' + msg]) return;
+    warned['draw:' + msg] = 1;
+    try { console.error(msg); } catch (e) { }
+  }
+  // after a draw failure: a fresh context state (setting the width resets it, the save() stack included)
+  function resetContext(ctx, canvas) {
+    if (typeof ctx.reset === 'function') ctx.reset();
+    else { var w = canvas.width; canvas.width = w; }
+  }
 
   /* ---------------------------------------------------------- world registry (spec §4.5)
    * PD.world(name, plugin) validates before it registers, so a bad plugin throws at registration and leaves nothing
@@ -2510,6 +2521,7 @@
     this.S = 1; this.ox = 0; this.oy = 0;
     this.quality = 1.5;
     this.layerUid = 0;
+    this.faults = []; this.ctxDirty = false; this.redo = false; this.faultedLayers = new WeakSet();   // draw failures (P.fault)
     this.loadDeck(checkDeck(this.opts.deck, 'new PD.Stage(canvas, { deck })'));
   }
 
@@ -2932,13 +2944,59 @@
       this.oy = Math.round((ch - DH * this.S) / 2);
     };
 
+    /* Drawing never takes the stage down (spec §4.2: the deck never crashes on stage). A pass, element, reveal or exit
+     * that throws while drawing loses only its own drawing: the other layers and the later passes, blackout included,
+     * still draw. Each failure goes into stage.faults (distinct messages, at most 50; the export self-test reports and
+     * empties it) and is logged once per distinct message as a console error. The first time something throws, the
+     * frame is drawn again from a reset context (the throw can leave ctx.save() levels and canvas state behind); from
+     * then on that pass or layer is drawn through guarded(), which gives it a save()/restore() level of its own and
+     * closes every level it leaves open. None of this runs until something throws: a deck that draws cleanly draws
+     * exactly as before. */
+    P.fault = function (what, e) {
+      var msg = what + ' could not be drawn: ' + (e && e.message ? e.message : String(e));
+      var si = this.cur ? this.cur.slide : 0, sc = this.deck && this.deck.scenes[si];
+      if (this.faults.length < 50 && this.faults.indexOf(msg) < 0) this.faults.push(msg);
+      errorOnce('pixeldeck: scene ' + (si + 1) + (sc && sc.id != null ? ' "' + sc.id + '"' : '') + ': ' + msg +
+        ' (skipped; the rest of the frame still draws)');
+    };
+    // a first failure inside an unguarded draw: redraw this frame, and put back for the rest of this pass through it
+    // the transform, alpha and blending a screen (or camera) pass starts with
+    P.firstFault = function (what, e, cam, jx, jy) {
+      var ctx = this.ctx, S = this.S;
+      this.fault(what, e);
+      this.ctxDirty = true; this.redo = true;
+      ctx.setTransform(S, 0, 0, S, this.ox, this.oy); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      if (cam) { ctx.translate(CX + jx, CY + jy); ctx.rotate(this.W.roll); ctx.translate(-CX, -CY); }
+    };
+    // fn.call(self, ctx, a, b, c, d) inside a save()/restore() of its own that also closes the save() levels it leaves
+    // open (and ignores restore() calls below its level); returns { e } when it threw, else null
+    P.guarded = function (fn, self, a, b, c, d) {
+      var ctx = this.ctx, save = ctx.save, restore = ctx.restore, hadS = has(ctx, 'save'), hadR = has(ctx, 'restore');
+      var open = 0, out = null;
+      save.call(ctx);
+      ctx.save = function () { open++; save.call(ctx); };
+      ctx.restore = function () { if (open > 0) { open--; restore.call(ctx); } };
+      try { fn.call(self, ctx, a, b, c, d); } catch (e) { out = { e: e }; }
+      if (hadS) ctx.save = save; else delete ctx.save;
+      if (hadR) ctx.restore = restore; else delete ctx.restore;
+      while (open > 0) { open--; restore.call(ctx); }
+      restore.call(ctx);
+      return out;
+    };
+    function passName(p) { return 'the "' + p.world + '.' + p.name + '" pass'; }
+
     /* The sorted pass list (spec §4.5 table). The stage clears to black at the identity transform, draws the shake
      * jitter (two Math.random calls, only when W.shake + shakeV ≠ 0), sets the design transform and clips; before
      * the first camera pass it applies the camera (translate CX+jx, CY+jy; rotate W.roll; translate back) and after
      * the last consecutive camera pass it restores; then the final restore. */
     P.draw = function () {
+      this.drawPasses();
+      if (this.redo) { this.redo = false; this.drawPasses(); }      // something threw for the first time (P.fault)
+    };
+    P.drawPasses = function () {
       Glow.frame();
       var ctx = this.ctx, W = this.W, S = this.S;
+      if (this.ctxDirty) { this.ctxDirty = false; resetContext(ctx, this.canvas); }    // after a first failure (P.fault)
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = '#000';
@@ -2948,14 +3006,17 @@
       ctx.setTransform(S, 0, 0, S, this.ox, this.oy);
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, DW, DH); ctx.clip();
-      var f = this.f, passes = this.passes, cam = false;
+      var f = this.f, passes = this.passes, cam = false, bad;
       f.T = this.T; f.S = S;
       for (var i = 0; i < passes.length; i++) {
         var p = passes[i];
         if (p.space === 'camera') {
           if (!cam) { ctx.save(); ctx.translate(CX + jx, CY + jy); ctx.rotate(W.roll); ctx.translate(-CX, -CY); cam = true; }
         } else if (cam) { ctx.restore(); cam = false; }
-        p.draw(ctx, W, p.state, f);
+        if (!p.faulted) {
+          try { p.draw(ctx, W, p.state, f); }
+          catch (e) { p.faulted = true; this.firstFault(passName(p), e, cam, jx, jy); }
+        } else if ((bad = this.guarded(p.draw, p, W, p.state, f))) this.fault(passName(p), bad.e);
       }
       if (cam) ctx.restore();
       ctx.restore();
@@ -3429,7 +3490,7 @@
        * the idle time between frames, a slice at a time while the frame budget allows, so `ready` comes sooner
        * (spec §4.15). It starts from frame(), i.e. after a real animation frame, and stops in manual-clock mode, so the
        * golden runs (RAF stubbed, manual clock) and the stage's tick order are untouched.
-       * ADDITION to spec §4.10's boot sequence, pending the lead's amendment: with the warm-up only inside stage.tick
+       * ADDITION to spec §4.10's boot sequence, ratified as spec AMEND-7: with the warm-up only inside stage.tick
        * (§4.5 step 9, one slice per frame as today) `ready` came 2.5–3.4 s after the page opened on this M2 (median
        * 3.15 s at 1920×1080, over the 3 s budget of §4.15 in 8 of 16 runs). With the idle slices it is 1.02–1.10 s. */
       var idleId = 0;
@@ -3486,7 +3547,7 @@
       }
       /* N: the same page with ?notes, in a window of its own with no opener (noopener), so it runs in its own process
        * and talks to this stage over BroadcastChannel. Not with sync off (nothing could drive it).
-       * DEVIATION from the letter of spec §4.10, pending the lead's amendment (R18): §4.10 says
+       * Spec AMEND-6 (ratified) replaces the letter of spec §4.10 here: §4.10 says
        * window.open(url, '_blank', 'noopener,popup,width=1200,height=760'). That call blocks the calling page until the
        * browser has built the new window: 52–216 ms per call (Playwright's Chromium 141 and Google Chrome 155, headless
        * and headed). The stage's frame gap at that moment was 33–333 ms, over the 50 ms limit of WP1 acceptance #4 and
@@ -3642,7 +3703,7 @@
     });
   }
 
-  /* The export self-test (spec §3.6): render every state once, report what threw. Never rejects. */
+  /* The export self-test (spec §3.6): render every state once, report what threw or failed to draw. Never rejects. */
   function selfTest(o) {
     var t0 = performance.now(), errors = [];
     function post(ok) {
@@ -3658,6 +3719,8 @@
       for (var si = 0; si < sc.length; si++) {
         for (var k = 0; k <= st.stepsOf(si); k++) {
           try { st.still(si, k); } catch (e) { errors.push({ slide: si, step: k, msg: String(e && e.message || e) }); }
+          // what failed while drawing: the stage skips it and keeps drawing (Stage.fault), the self-test still reports it
+          st.faults.splice(0).forEach(function (m) { errors.push({ slide: si, step: k, msg: m }); });
         }
       }
       p.destroy();
@@ -3832,8 +3895,9 @@
           want.next = n;
           TB.request(n.slide, n.step, 1);
           paint('next');
-          var ns = DECK[n.slide];
-          $('nextNotes').textContent = (n.step ? 'Step ' + n.step + ' of ' : '') + (n.slide + 1) + ' · ' + (ns.id || '') +
+          var ns = DECK[n.slide], nk = stepsOf(n.slide);
+          // the header's notation: "5 / 10 · step 3/3 · id" is click 3 of the 3 in scene 5 (not "step 3 of 5")
+          $('nextNotes').textContent = (n.slide + 1) + ' / ' + DECK.length + (nk ? ' · step ' + n.step + '/' + nk : '') + ' · ' + (ns.id || '') +
             (n.step && ns.steps[n.step - 1].notes ? ' — ' + ns.steps[n.step - 1].notes : ns.notes ? ' — ' + ns.notes : '');
         } else {
           want.next = null;
@@ -3923,6 +3987,12 @@
 },{});</script>
 <script>PD.module("worlds/core",["core/util","core/fx"],function (PD, util, fx) {
   var DW = util.DW, DH = util.DH, U = util.U, FX = fx.FX;
+  function nameOf(L) {             // how a failing layer is named in Stage.fault's message
+    var sp = L && L.spec, str = L && typeof L.str === 'string' ? L.str : null;
+    if (sp && sp.id != null) return 'element "' + sp.id + '"';
+    if (str != null) return 'the text "' + (str.length > 40 ? str.slice(0, 40) + '…' : str) + '"';
+    return 'an element';
+  }
 
   var plugin = PD.world('core', {
     params: { roll: 0, shake: 0, letterbox: 0, exposure: 1, vignette: 0.6, grain: 0.05, particles: 1 },
@@ -3934,8 +4004,15 @@
         field.draw(ctx, f.T);
       } },
       { z: 100, space: 'screen', name: 'elements', draw: function (ctx, W, st, f) {
-        var layers = f.stage.layers, T = f.T, S = f.S;
-        for (var i = 0; i < layers.length; i++) layers[i].draw(ctx, T, S);
+        var s = f.stage, layers = s.layers, T = f.T, S = f.S, faulted = s.faultedLayers, bad;
+        for (var i = 0; i < layers.length; i++) {
+          var L = layers[i];
+          // an element (or its reveal or exit) that throws must not take the other layers and the post passes with it
+          // (Stage.fault): after its first failure it is drawn guarded
+          if (!faulted.has(L)) {
+            try { L.draw(ctx, T, S); } catch (e) { faulted.add(L); s.firstFault(nameOf(L), e, false); }
+          } else if ((bad = s.guarded(L.draw, L, T, S))) s.fault(nameOf(L), bad.e);
+        }
       } },
       { z: 110, space: 'post', name: 'flash', draw: function (ctx, W, st, f) {
         var s = f.stage;
@@ -5039,9 +5116,52 @@
 },{});</script>
 <script>PD.module("templates/cinematic",[],function (PD) {
   var ROLE_FUTURE = ['#fff1c9', '#ffb347'], ROLE_PAST = ['#dfe6f2', '#8c9bb6'];   // only used when a theme defines no such role
+  var has = function (o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); };
+  var NAME_MAX = 18, ESCAPE_MAX = 12, BOX_LINE_MAX = 40;                         // character limits of props that are fitted to one line
 
   function str(v) { return v == null ? '' : String(v); }
   function list(v) { return Array.isArray(v) ? v : v == null ? [] : [v]; }
+  function styleOf(env, name) { var s = env.theme && env.theme.styles; return (s && s[name]) || {}; }
+  // the size that keeps `s` on ONE line no wider than maxW (default: the style's own wrap width), or null when the
+  // style's size already does: a line that fits is left exactly as written. Only text within its prop's character limit
+  // (maxChars) steps down; longer text wraps as styled, and the Director asks for it to be shortened (copy.lines,
+  // template.prop-max) instead of it shrinking out of sight.
+  function fitSize(env, s, style, maxW, maxChars) {
+    var st = styleOf(env, style), base = st.size;
+    if (!s || !(base > 0) || (maxChars && s.length > maxChars)) return null;
+    var f = env.fit(s, style, base, maxW || st.maxWidth || 1700);
+    return f < base ? f : null;
+  }
+  // the lines the text element (engine/core/text.js) breaks `s` into at maxW: the same greedy word wrap, measured with
+  // env.measure so a block can be laid out before the stage builds it. memo (per style and size) caches the widths.
+  function wrapAt(env, s, style, size, maxW, memo) {
+    function wide(c) {
+      if (!has(memo, c)) { var m = env.measure(c, style, size); memo[c] = m.lines.length > 1 ? Infinity : m.w; }
+      return memo[c] > maxW;
+    }
+    var lines = [];
+    String(s).split('\n').forEach(function (para) {
+      var words = para.split(' '), line = '';
+      for (var i = 0; i < words.length; i++) {
+        var cand = line ? line + ' ' + words[i] : words[i];
+        if (line && wide(cand)) { lines.push(line); line = words[i]; } else line = cand;
+      }
+      lines.push(line);
+    });
+    return lines;
+  }
+  // even lines: the narrowest wrap width up to maxW that keeps the number of lines `s` needs at maxW, so a wrapped line
+  // does not end on one stray word. → { maxWidth, lines } (maxWidth is maxW when s fits on one line)
+  function balance(env, s, style, size, maxW) {
+    var memo = Object.create(null), at = wrapAt(env, s, style, size, maxW, memo), n = at.length;
+    if (n < 2) return { maxWidth: maxW, lines: n };
+    var total = 0;
+    at.forEach(function (l) { total += env.measure(l, style, size).w; });
+    var lo = Math.max(1, Math.floor(total / n) - 1), hi = Math.ceil(maxW);
+    if (wrapAt(env, s, style, size, lo, memo).length <= n) hi = lo;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (wrapAt(env, s, style, size, mid, memo).length <= n) hi = mid; else lo = mid; }
+    return { maxWidth: Math.min(maxW, hi + 2), lines: n };
+  }
   function role(env, name, fallback) { var r = env.role(name); if (r === undefined) r = fallback; return Array.isArray(r) ? r.slice() : r; }   // always a copy
   function hex2(v) { return ('0' + (v | 0).toString(16)).slice(-2); }
   // a ring of n glow points around (cx, cy); the angle maths is the original's, term for term
@@ -5073,8 +5193,10 @@
     expand: function (p, env) {
       var spark = { shape: 'spark', id: 'spark', count: p.sparkCount, radius: 40 };
       if (p.sparkColor && p.sparkColor !== 'gold') spark.color = p.sparkColor;       // gold is the spark's own colour
+      // a look without this shot opens in its DARK shot when it has one (Slate), so the spark is still a spark in the dark
+      var dark = has(env.shots, 'DARK') ? 'DARK' : 'DRIFT';
       return {
-        world: env.W(env.shot(p.shot), { spark: 1 }),
+        world: env.W(env.shot(p.shot, dark), { spark: 1 }),
         worldTime: 3,
         particles: [spark],
         motion: { entry: 'spark', dur: 2.4, spread: 1.8, ease: 'easeOutCubic', arc: 0.8 },
@@ -5091,7 +5213,7 @@
     requires: { worlds: [] },
     story: { energy: 4, talkSec: 30, stepTalkSec: 0, roles: ['identity', 'idea', 'callback'], hook: false },
     props: {
-      title: { type: 'text', label: 'Name', required: true, max: 18, style: 'hero' },
+      title: { type: 'text', label: 'Name', required: true, max: NAME_MAX, style: 'hero' },
       subtitle: { type: 'text', label: 'Tagline', max: 40, style: 'subtitle', default: 'Making work more human' },
       subtitleAt: { type: 'number', label: 'Tagline appears after (s)', min: 0, max: 6, step: 0.1, default: 2.6 },
       flash: { type: 'number', label: 'Flash', min: 0, max: 1, step: 0.01, default: 0.32 },
@@ -5109,6 +5231,8 @@
         text: [{ id: 'brand', str: str(p.title), style: 'hero', y: 470, reveal: 'particles' }],
         dwell: 6
       };
+      var hs = fitSize(env, str(p.title), 'hero', 0, NAME_MAX);                  // a name that would wrap into the tagline stays on one line
+      if (hs) sc.text[0].size = hs;
       if (env.hasParam('spark')) sc.timing = { spark: [0.6, 'outQuad'] };       // the cold-open spark fades as the brand blooms
       if (p.flash > 0) sc.cues = [{ at: 0.35, flash: p.flash }];
       if (str(p.subtitle)) sc.text.push({ str: str(p.subtitle), style: 'subtitle', y: 610, reveal: 'letters', at: p.subtitleAt });
@@ -5179,7 +5303,15 @@
         dwell: 5
       };
       if (str(p.kicker)) sc.text.push({ str: str(p.kicker), style: 'kicker', x: 220, y: 430, align: 'left', at: 1.8 });
-      sc.text.push({ str: str(p.line), style: 'statement', x: 220, y: 500, align: 'left', at: 2.4, reveal: 'letters' });
+      // a line too wide for the space left of the galaxy's core (x 220 to 1120) wraps there in even lines, and the block
+      // grows downwards from where one line's top would be, away from the kicker
+      var line = { str: str(p.line), style: 'statement', x: 220, y: 500, align: 'left', at: 2.4, reveal: 'letters' };
+      var b = balance(env, line.str, 'statement', null, 900);
+      if (b.lines > 1) {
+        var st = styleOf(env, 'statement'), sz = st.size || 64;
+        line.maxWidth = b.maxWidth; line.y = 500 + (b.lines - 1) * sz * (st.lineHeight || 1.12) / 2;
+      }
+      sc.text.push(line);
       if (str(p.marker)) {
         sc.steps = [{
           world: { earth: 1 }, timing: { earth: [1.5, 'inOutQuad'] },
@@ -5297,24 +5429,62 @@
         pts.push({ x: c.x, y: c.y, s: 22, color: '#ffffff' });
         return pts;
       }
+      var us = ms.map(function (m, i) {
+        return typeof m.u === 'number' && isFinite(m.u) ? Math.min(1, Math.max(0, m.u)) : (n > 1 ? 0.04 + i * 0.935 / (n - 1) : 0.5);
+      });
+      /* Text positions. An explicit pos is used as given. 'auto' takes the spec's rule (u < .12 above, u < .5 below, else
+       * left), unless that would print over text already on screen (the kicker, the title, an earlier milestone): many
+       * milestones crowd the flat start of the curve. Then the text goes to the other side of the curve, or is lifted
+       * (left of a steep node, above a flat one) by the least amount that clears that text, the curve, the nodes and the
+       * frame. When nothing clears, the rule's position stays. One Giant Leap's seven never collide, so they don't move. */
+      var PAD = 4, taken = [], nodes = us.map(curveXY);
+      function box(x, y, w, h, align) { var x0 = align === 'right' ? x - w : align === 'left' ? x : x - w / 2; return { x0: x0, x1: x0 + w, y0: y - h / 2, y1: y + h / 2 }; }
+      function hit(a, b, pad) { return a.x0 < b.x1 + pad && b.x0 < a.x1 + pad && a.y0 < b.y1 + pad && b.y0 < a.y1 + pad; }
+      function blockAt(c, pos, lift, sz) {
+        var tx = c.x, ty, align = 'center';
+        if (pos === 'left') { tx = c.x - 40; ty = c.y - 6; align = 'right'; }
+        else if (pos === 'below') ty = c.y + 74;
+        else ty = c.y - 88;
+        ty -= lift;
+        return { tx: tx, ty: ty, align: align, boxes: [box(tx, ty - 18, sz.wy, sz.hy, align), box(tx, ty + 26, sz.wl, sz.hl, align)] };
+      }
+      function clearOfText(bl) { return bl.boxes.every(function (b) { return taken.every(function (t) { return !hit(b, t, PAD); }); }); }
+      function clearOfAll(bl) {
+        return clearOfText(bl) && bl.boxes.every(function (b) {
+          if (b.x0 < 8 || b.x1 > 1912 || b.y0 < 8 || b.y1 > 1072) return false;
+          if (nodes.some(function (c) { return hit(b, { x0: c.x - 20, x1: c.x + 20, y0: c.y - 20, y1: c.y + 20 }, 0); })) return false;
+          if (!p.curve) return true;
+          for (var k = 0; k <= 420; k += 2) { var q = curveXY(k / 420); if (hit(b, { x0: q.x - 3, x1: q.x + 3, y0: q.y - 3, y1: q.y + 3 }, PAD)) return false; }
+          return true;
+        });
+      }
+      function measured(s, style) { var m = env.measure(s, style); return { w: m.w, h: m.h }; }
+      if (str(p.kicker)) { var km = measured(str(p.kicker), 'kicker'); taken.push(box(160, 150, km.w, km.h, 'left')); }
+      var tm = measured(str(p.title), 'statement'); taken.push(box(160, 215, tm.w, tm.h, 'left'));
       var sc = {
         world: env.shot(p.shot),
         worldTime: 2.5,
         motion: { stagger: 'leftToRight', dur: 1.4, spread: 1.6, ease: 'easeInOutCubic', arc: 0.15, entry: 'void', exit: 'drift' },
         text: [],
         steps: ms.map(function (m, i) {
-          var u = typeof m.u === 'number' && isFinite(m.u) ? Math.min(1, Math.max(0, m.u)) : (n > 1 ? 0.04 + i * 0.935 / (n - 1) : 0.5);
-          var pos = m.pos === 'above' || m.pos === 'below' || m.pos === 'left' ? m.pos : (u < 0.12 ? 'above' : u < 0.5 ? 'below' : 'left');
+          var u = us[i], c = nodes[i], auto = !(m.pos === 'above' || m.pos === 'below' || m.pos === 'left');
+          var pos = auto ? (u < 0.12 ? 'above' : u < 0.5 ? 'below' : 'left') : m.pos;
           var color = m.color || (p.highlightLast && i === n - 1 ? glow : accent);
-          var c = curveXY(u), tx = c.x, ty, align = 'center';
-          if (pos === 'left') { tx = c.x - 40; ty = c.y - 6; align = 'right'; }
-          else if (pos === 'below') ty = c.y + 74;
-          else ty = c.y - 88;
+          var y = measured(str(m.when), 'year'), l = measured(str(m.label), 'label'), sz = { wy: y.w, hy: y.h, wl: l.w, hl: l.h };
+          var bl = blockAt(c, pos, 0, sz);
+          if (auto && !clearOfText(bl)) {
+            var tries = pos === 'below' ? ['above', 'below'] : pos === 'above' ? ['below', 'above'] : ['left'], found = null;
+            for (var lift = 0; lift <= 240 && !found; lift += 4) {
+              for (var t = 0; t < tries.length && !found; t++) { var cand = blockAt(c, tries[t], lift, sz); if (clearOfAll(cand)) found = cand; }
+            }
+            if (found) bl = found;
+          }
+          taken.push(bl.boxes[0], bl.boxes[1]);
           return {
             particles: [{ shape: 'points', points: pointsOf(u, color) }],
             text: [
-              { str: str(m.when), style: 'year', x: tx, y: ty - 18, align: align, reveal: 'rise' },
-              { str: str(m.label), style: 'label', x: tx, y: ty + 26, align: align, reveal: 'rise', at: 0.15 }
+              { str: str(m.when), style: 'year', x: bl.tx, y: bl.ty - 18, align: bl.align, reveal: 'rise' },
+              { str: str(m.label), style: 'label', x: bl.tx, y: bl.ty + 26, align: bl.align, reveal: 'rise', at: 0.15 }
             ]
           };
         }),
@@ -5342,8 +5512,8 @@
     story: { energy: 3, talkSec: 45, stepTalkSec: 20, roles: ['tension'], hook: false },
     props: {
       line: { type: 'text', label: 'Line beside the box', required: true, max: 60, style: 'statement' },
-      escape: { type: 'text', label: 'The escape word', required: true, max: 12, style: 'hero' },
-      subtitle: { type: 'text', label: 'Line under the escape word', max: 40, style: 'subtitle', default: 'is where the future lives' },
+      escape: { type: 'text', label: 'The escape word', required: true, max: ESCAPE_MAX, style: 'hero' },
+      subtitle: { type: 'text', label: 'Line under the escape word', max: BOX_LINE_MAX, style: 'subtitle', default: 'is where the future lives' },
       cubeColor: { type: 'color', label: 'Box colour', default: 'cyan' },
       cubeColor2: { type: 'color', label: 'Box colour, far edge', default: 'violet' },
       shot: { type: 'shot', label: 'World', default: 'BOX' }
@@ -5354,11 +5524,19 @@
     },
     seed: { line: '{oldWay} was built for a world that is gone.', escape: 'Outside', subtitle: 'is where {newWay} lives' },
     expand: function (p, env) {
+      // the escape word and its line stay in the space right of the box: centred on x 1380, at most 800 wide (x 980 to
+      // 1780); a longer word steps down a size rather than run into the cube or off the frame
       var out = [{
         str: str(p.escape), style: 'hero', x: 1380, y: 500, reveal: 'particles',
         color: role(env, 'future', ROLE_FUTURE), glow: role(env, 'futureGlow', '#ff8a3d')
       }];
-      if (str(p.subtitle)) out.push({ str: str(p.subtitle), style: 'subtitle', x: 1380, y: 610, at: 2.6, color: role(env, 'accent', '#ffd27a') });
+      var es = fitSize(env, out[0].str, 'hero', 800, ESCAPE_MAX);
+      if (es) out[0].size = es;
+      if (str(p.subtitle)) {
+        var sub = { str: str(p.subtitle), style: 'subtitle', x: 1380, y: 610, at: 2.6, color: role(env, 'accent', '#ffd27a') }, ss = fitSize(env, sub.str, 'subtitle', 800, BOX_LINE_MAX);
+        if (ss) sub.size = ss;
+        out.push(sub);
+      }
       return {
         world: env.shot(p.shot),
         worldTime: 2.4,
@@ -5424,23 +5602,28 @@
     requires: { worlds: [] },
     story: { energy: 4, talkSec: 30, stepTalkSec: 0, roles: ['callback', 'cta', 'resolution'], hook: false },
     props: {
-      title: { type: 'text', label: 'Name', required: true, max: 18, style: 'hero' },
+      title: { type: 'text', label: 'Name', required: true, max: NAME_MAX, style: 'hero' },
       subtitle: { type: 'text', label: 'Closing line or ask', max: 40, style: 'subtitle', hint: 'Put your ask here', default: 'Thank you' },
       shot: { type: 'shot', label: 'World', default: 'FINALE' }
     },
     example: { title: 'One Giant Leap', subtitle: 'Thank you', shot: 'FINALE' },
     seed: { title: '{brand}', subtitle: '{ask}' },
     expand: function (p, env) {
+      // over a sunrise (One Giant Leap's FINALE shot) the name rides above the sun; with no sun in the shot the name and
+      // the ask are centred like the brand reveal's, instead of leaving the lower half of the frame empty
+      var w = env.shot(p.shot), sun = w.sun > 0;
       var sc = {
-        world: env.shot(p.shot),
+        world: w,
         worldTime: 4,
         prelude: 'explode', preludeTime: 0.8, explodePower: 1.1,
         motion: { stagger: 'radial', ease: 'easeOutCubic', dur: 2.0, spread: 0.9, arc: 0.4, entry: 'void', exit: 'drift' },
-        text: [{ str: str(p.title), style: 'hero', y: 380, reveal: 'particles' }],
+        text: [{ str: str(p.title), style: 'hero', y: sun ? 380 : 470, reveal: 'particles' }],
         dwell: 7
       };
+      var hs = fitSize(env, str(p.title), 'hero', 0, NAME_MAX);                  // a name that would wrap into the ask stays on one line
+      if (hs) sc.text[0].size = hs;
       if (env.hasParam('sun')) sc.timing = { sun: [3, 'inOutQuad', 1], sunY: [5, 'outCubic', 0.5] };
-      if (str(p.subtitle)) sc.text.push({ str: str(p.subtitle), style: 'subtitle', y: 500, at: 2.8 });
+      if (str(p.subtitle)) sc.text.push({ str: str(p.subtitle), style: 'subtitle', y: sun ? 500 : 610, at: 2.8 });
       return sc;
     }
   });
@@ -5450,10 +5633,44 @@
 <script>PD.module("templates/essentials",[],function (PD) {
   var CX = 960, CY = 540;
   var ALL_ROLES = ['hook', 'setup', 'identity', 'scale', 'relevance', 'emotion', 'proof', 'tension', 'turn', 'idea', 'climax', 'resolution', 'cta', 'callback'];
+  var has = function (o, k) { return o != null && Object.prototype.hasOwnProperty.call(o, k); };
 
   function str(v) { return v == null ? '' : String(v); }
   function list(v) { return Array.isArray(v) ? v : v == null ? [] : [v]; }
   function num(v, d) { return typeof v === 'number' && isFinite(v) ? v : d; }
+  function styleOf(env, name) { var s = env.theme && env.theme.styles; return (s && s[name]) || {}; }
+  // the height of a block of n lines in a style at a size (the text element's rule: size + (n - 1) · size · lineHeight)
+  function blockH(env, style, size, n) { var st = styleOf(env, style), sz = size || st.size || 0; return sz + Math.max(0, n - 1) * sz * (st.lineHeight || 1.12); }
+  // the lines the text element (engine/core/text.js) breaks `s` into at maxW: the same greedy word wrap, measured with
+  // env.measure so a block can be laid out before the stage builds it. memo (per style and size) caches the widths.
+  function wrapAt(env, s, style, size, maxW, memo) {
+    function wide(c) {
+      if (!has(memo, c)) { var m = env.measure(c, style, size); memo[c] = m.lines.length > 1 ? Infinity : m.w; }
+      return memo[c] > maxW;
+    }
+    var lines = [];
+    String(s).split('\n').forEach(function (para) {
+      var words = para.split(' '), line = '';
+      for (var i = 0; i < words.length; i++) {
+        var cand = line ? line + ' ' + words[i] : words[i];
+        if (line && wide(cand)) { lines.push(line); line = words[i]; } else line = cand;
+      }
+      lines.push(line);
+    });
+    return lines;
+  }
+  // even lines: the narrowest wrap width up to maxW that keeps the number of lines `s` needs at maxW, so a wrapped line
+  // does not end on one stray word. → { maxWidth, lines } (maxWidth is maxW when s fits on one line)
+  function balance(env, s, style, size, maxW) {
+    var memo = Object.create(null), at = wrapAt(env, s, style, size, maxW, memo), n = at.length;
+    if (n < 2) return { maxWidth: maxW, lines: n };
+    var total = 0;
+    at.forEach(function (l) { total += env.measure(l, style, size).w; });
+    var lo = Math.max(1, Math.floor(total / n) - 1), hi = Math.ceil(maxW);
+    if (wrapAt(env, s, style, size, lo, memo).length <= n) hi = lo;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (wrapAt(env, s, style, size, mid, memo).length <= n) hi = mid; else lo = mid; }
+    return { maxWidth: Math.min(maxW, hi + 2), lines: n };
+  }
   // 1234.5 → '1,234.5' with `dec` decimals (the counter element formats its numbers the same way)
   function fmt(n, dec, sep) {
     var s = Math.abs(n).toFixed(dec), parts = s.split('.');
@@ -5512,11 +5729,17 @@
       shot: { type: 'shot', label: 'World', default: 'DRIFT' }
     },
     example: { value: 62, decimals: 0, prefix: '', suffix: '%', label: 'of your audience feels this every week', source: 'Your source, 2026', reveal: 'count', shot: 'DRIFT' },
-    seed: { value: 0, label: '{what the number means}' },
+    // the storyboard asks for the number like any other line: a seeded 0 would put "0%" on stage that nobody gave
+    seed: { value: '{number}', label: '{what the number means}' },
     expand: function (p, env) {
       var dec = Math.min(3, Math.max(0, Math.round(num(p.decimals, 0))));
       var sc = { world: env.shot(p.shot), worldTime: 2.4, text: [], dwell: 5 };
-      if (p.reveal === 'particles') {
+      if (num(p.value, null) === null) {
+        // no number yet: show what is there (the seed's {number} prompt, or {number} when it is empty) as plain text, never
+        // a made-up 0 with a unit; a {…} on stage is copy.placeholder for the Director, and anything else is a prop-type error
+        var shown = str(p.value).trim() || '{number}';
+        sc.text.push({ id: 'num', str: shown, style: 'mega', y: 450, reveal: p.reveal === 'particles' ? 'particles' : 'fade' });
+      } else if (p.reveal === 'particles') {
         sc.motion = { stagger: 'leftToRight', spread: 1.2 };
         sc.text.push({ id: 'num', str: str(p.prefix) + fmt(num(p.value, 0), dec, ',') + str(p.suffix), style: 'mega', y: 450, reveal: 'particles' });
       } else {
@@ -5543,16 +5766,20 @@
     example: { quote: 'We stopped asking for permission and started shipping.', who: 'A customer', role: 'Interview, 2026', shot: 'DRIFT' },
     seed: { quote: '{quote}', who: '{who}' },
     expand: function (p, env) {
+      // a quote that wraps does so in even lines (no last line of one word), and who said it sits 72 px under the quote's
+      // last line, whatever its length (y 675 for four lines, the most the prop allows; 570 for one)
+      var q = '“' + str(p.quote) + '”', b = balance(env, q, 'statement', 56, 1300);
+      var whoY = Math.round(470 + blockH(env, 'statement', 56, b.lines) / 2 + 72);
       var sc = {
         world: env.shot(p.shot),
         worldTime: 2.4,
         text: [
-          { str: '“' + str(p.quote) + '”', style: 'statement', size: 56, maxWidth: 1300, y: 470, reveal: 'letters' },
-          { str: str(p.who), style: 'label', y: 700, at: 2.2 }
+          { str: q, style: 'statement', size: 56, maxWidth: b.maxWidth, y: 470, reveal: 'letters' },
+          { str: str(p.who), style: 'label', y: whoY, at: 2.2 }
         ],
         dwell: 5
       };
-      if (str(p.role)) sc.text.push({ str: str(p.role), style: 'caption', y: 745, at: 2.5 });
+      if (str(p.role)) sc.text.push({ str: str(p.role), style: 'caption', y: whoY + 45, at: 2.5 });
       return sc;
     }
   });
@@ -5591,8 +5818,16 @@
       if (typeof accent !== 'string') accent = '#ffd27a';                    // the look's accent colour marks each point
       // rows: y = 330 + k · 170 (five rows are packed tighter so the last one stays on the screen)
       var y0 = n <= 4 ? 330 : 310, pitch = n <= 4 ? 170 : 150;
-      // columns: x = 960 + (k − (n − 1) / 2) · 560, each 480 wide (more columns squeeze together, inside 120 px margins)
-      var pitchX = Math.min(560, Math.floor(1680 / Math.max(1, n))), colW = Math.min(480, pitchX - 40);
+      // columns: x = 960 + (k − (n − 1) / 2) · 560, each 480 wide (more columns squeeze together, inside 120 px margins).
+      // A title wraps inside its column rather than run into the next one; titles start at y 459 and every detail starts
+      // at the same height, 24 px under the tallest title, so the column tops line up.
+      var pitchX = Math.min(560, Math.floor(1680 / Math.max(1, n))), colW = Math.min(480, pitchX - 40), colTop = 459, detailTop = 0;
+      if (cols) {
+        var memoT = Object.create(null), memoD = Object.create(null);
+        var titleLines = items.map(function (it) { return wrapAt(env, str(it && it.title), 'label', null, colW, memoT).length; });
+        var detailLines = items.map(function (it) { return str(it && it.line) ? wrapAt(env, str(it.line), 'statement', 44, colW, memoD).length : 0; });
+        detailTop = colTop + blockH(env, 'label', null, Math.max.apply(null, titleLines.concat(1))) + 24;
+      }
       var sc = {
         world: env.shot(p.shot),
         worldTime: 2.4,
@@ -5602,11 +5837,11 @@
           if (cols) {
             var x = CX + (k - (n - 1) / 2) * pitchX;
             step.particles.push({ shape: 'points', points: ring(x, 400, 22, 15, 6, accent) });
-            step.text.push({ str: title, style: 'label', x: x, y: 470, reveal: 'rise' });
-            if (line) step.text.push({ str: line, style: 'statement', size: 44, x: x, y: 600, maxWidth: colW, reveal: 'rise', at: 0.15 });
+            step.text.push({ str: title, style: 'label', x: x, y: colTop + blockH(env, 'label', null, titleLines[k]) / 2, maxWidth: colW, reveal: 'rise' });
+            if (line) step.text.push({ str: line, style: 'statement', size: 44, x: x, y: detailTop + blockH(env, 'statement', 44, detailLines[k]) / 2, maxWidth: colW, reveal: 'rise', at: 0.15 });
           } else {
             var y = y0 + k * pitch;
-            step.particles.push({ shape: 'points', points: ring(110, y + 24, 22, 15, 6, accent) });
+            step.particles.push({ shape: 'points', points: ring(110, y, 22, 15, 6, accent) });     // the bullet sits on the title's line
             step.text.push({ str: title, style: 'label', x: 160, y: y, align: 'left', reveal: 'rise' });
             if (line) step.text.push({ str: line, style: 'statement', size: 44, x: 160, y: y + 52, align: 'left', reveal: 'rise', at: 0.15 });
           }
@@ -5614,7 +5849,7 @@
         }),
         dwell: 3
       };
-      if (str(p.kicker)) sc.text.push({ str: str(p.kicker), style: 'kicker', x: 160, y: 150, align: 'left' });
+      if (str(p.kicker)) sc.text.push(cols ? { str: str(p.kicker), style: 'kicker', x: CX, y: 150 } : { str: str(p.kicker), style: 'kicker', x: 160, y: 150, align: 'left' });   // centred over centred columns
       return sc;
     }
   });

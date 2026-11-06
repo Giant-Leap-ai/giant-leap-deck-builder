@@ -1,0 +1,2 @@
+# tools/test/run.js writes one harness page per run (.harness-<pid>.html) and deletes it afterwards
+.harness-*.html

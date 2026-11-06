@@ -192,6 +192,11 @@
     a.deepEqual(p(T1('timeline', { title: 'T', milestones: [{ when: 'a', label: 'b', u: 'high' }, { when: 'c', label: 'd', pos: 'middle' }] })), ['props.milestones[0].u', 'props.milestones[1].pos']);
     a.deepEqual(p(T1('hyperspace', { lines: [{ x: 1 }] })), ['props.lines[0]']);
     a.deepEqual(p(T1('big-number', { value: 'many', label: 'L' })), ['props.value']);
+    // the storyboard seed's prompt in a required number is a line still to write (the Director's copy.placeholder), not an error
+    a.deepEqual(T1('big-number', { value: '{number}', label: 'L' }), [], 'the seed prompt {number} is not a type error');
+    a.deepEqual(pick(V([{ id: 'a', template: 'big-number', props: { value: '{number}', label: 'L' } }]), 'template.prop-required'), [], 'nor a missing value');
+    a.deepEqual(p(T1('big-number', { value: '{number} people', label: 'L' })), ['props.value'], 'only a value that is one prompt and nothing else');
+    a.deepEqual(p(T1('cold-open', { line: 'x', lineAt: '{when}' })), ['props.lineAt'], 'an optional number never takes a prompt');
   });
 
   T.test('template.prop-max (warn): text too long, number out of range, too many or too few list items, text that wraps too far', function (a) {

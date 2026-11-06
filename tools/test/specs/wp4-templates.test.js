@@ -37,7 +37,7 @@
     'pivot': { kicker: 'The turn', from: 'Not {oldWay}.', to: '{newWay}.', subtitle: '{shortIdea}' },
     'finale': { title: '{brand}', subtitle: '{ask}' },
     'statement': { line: '{your line}' },
-    'big-number': { value: 0, label: '{what the number means}' },
+    'big-number': { value: '{number}', label: '{what the number means}' },   // not §5's value 0: a seeded 0 put "0%" on stage that nobody gave (P9)
     'quote': { quote: '{quote}', who: '{who}' },
     'three-points': { items: [{ title: '{point}' }, { title: '{point}' }, { title: '{point}' }] },
     'logo': { asset: '', tagline: '{tagline}' },
@@ -89,6 +89,9 @@
   function brief(issues) { return issues.map(function (i) { return i.level + ' ' + i.code + ' ' + i.msg; }); }
   function clone(v) { return JSON.parse(JSON.stringify(v)); }
   function themeEnv(theme, meta) { return PD.get('core/compile').helpers(PD.compile(deckOf(theme, [], meta))); }
+  // a text spec as the stage lays it out (its own maxWidth and size): { x, y, w, h, lines }
+  function wrapped(theme, spec, meta) { var c = PD.compile(deckOf(theme, [], meta)); return PD.element.get('text').measure(spec, { theme: c.theme, col: PD.get('core/util').colFor(c.theme.colors || {}) }); }
+  function overlaps(r, q, pad) { pad = pad || 0; return r.x < q.x + q.w + pad && q.x < r.x + r.w + pad && r.y < q.y + q.h + pad && q.y < r.y + r.h + pad; }
   function counterReady() { return PD.element.has('counter'); }
 
   T.test('catalog: the 16 template ids of spec §5, cinematic then essentials, with their story metadata and requirements', function (a) {
@@ -449,11 +452,21 @@
     a.equal(compileOne('cosmos', 'big-number', { value: '62', label: 'L', reveal: 'particles' }).scenes[0].text[0].str, '62%', 'a numeric string is coerced by compile; % is the default suffix');
   });
 
-  T.test('quote (13): curly-quoted statement (size 56, maxWidth 1300, y 470), who at y 700 / 2.2 s, role at y 745 / 2.5 s', function (a) {
+  T.test('quote (13): curly-quoted statement (size 56, maxWidth 1300, y 470) in even lines; who 72 px under its last line / 2.2 s, role 45 px lower / 2.5 s', function (a) {
     var s = compileOne('cosmos', 'quote', { quote: 'Be brief.', who: 'Someone', role: 'Somewhere' }).scenes[0];
     a.deepEqual(s.text, [{ str: '“Be brief.”', style: 'statement', size: 56, maxWidth: 1300, y: 470, reveal: 'letters' },
-      { str: 'Someone', style: 'label', y: 700, at: 2.2 }, { str: 'Somewhere', style: 'caption', y: 745, at: 2.5 }]);
+      { str: 'Someone', style: 'label', y: 570, at: 2.2 }, { str: 'Somewhere', style: 'caption', y: 615, at: 2.5 }], 'one line (56 px): who at 470 + 28 + 72');
     a.equal(compileOne('cosmos', 'quote', { quote: 'Q', who: 'W' }).scenes[0].text.length, 2, 'no role line when empty');
+    // the template's own example wrapped as "… and started / shipping.”": now two even lines, and the attribution follows the block
+    ['cosmos', 'slate'].forEach(function (th) {
+      if (!PD.theme.has(th)) return;
+      var q = compileOne(th, 'quote', clone(PD.template.get('quote').example)).scenes[0].text, m = wrapped(th, q[0]);
+      a.equal(m.lines.length, 2, th + ': the example takes two lines'); a.ok(m.lines[1].split(' ').length >= 3, th + ': the last line is not a stray word (' + m.lines[1] + ')');
+      a.ok(q[0].maxWidth < 1300 && m.w <= q[0].maxWidth, th + ': a narrower, even measure');
+      a.equal(q[1].y, Math.round(470 + m.h / 2 + 72), th + ': who sits 72 px under the last line'); a.equal(q[2].y, q[1].y + 45);
+    });
+    var four = compileOne('cosmos', 'quote', { quote: 'Before this, every week felt like we were pushing paper uphill. Now the team spends its time on the work that actually matters to our customers.', who: 'W', role: 'R' }).scenes[0].text;
+    a.ok(four[1].y <= 700 && four[1].y === Math.round(470 + wrapped('cosmos', four[0]).h / 2 + 72), 'a long quote: still 72 px under it, never lower than the old 700');
   });
 
   T.test('three-points (14): a kicker at (160, 150), item k is step k+1; rows at y = 330 + k·170 with a 22-point ring at x 110; columns spread around x 960', function (a) {
@@ -506,6 +519,118 @@
         a.ok(!('stars' in sl.world), 'no space params are added under a look that does not have them'); a.equal(sl.world.photo, 1);
       }
     });
+  });
+
+  /* Hardening (review of the public release): copy the props allow, but longer than One Giant Leap's, must not print over
+   * other text or leave its space. The example expansions are pinned above and by wp4-parity; these are the long cases. */
+  var LOOKS = ['cosmos', 'slate'];
+  function looks(fn) { LOOKS.forEach(function (th) { if (PD.theme.has(th)) fn(th); }); }
+
+  T.test('hardening: a long hero name (brand-reveal, finale) steps down to stay on one line above its tagline or ask; a short one keeps the style size', function (a) {
+    looks(function (th) {
+      ['Northwind Partners', 'Acme Consulting', 'Harborview Dental', 'Summit Analytics'].forEach(function (name) {
+        var br = compileOne(th, 'brand-reveal', { title: name, subtitle: 'Ambitious work that still feels human' }).scenes[0].text;
+        var m = wrapped(th, br[0]);
+        a.equal(m.lines.length, 1, th + ' brand-reveal "' + name + '": one line'); a.ok(m.y + m.h <= wrapped(th, br[1]).y, th + ' "' + name + '": above the tagline');
+        var fi = compileOne(th, 'finale', { title: name, subtitle: 'Book a pilot: northwind.example/pilot' }).scenes[0].text;
+        var f = wrapped(th, fi[0]);
+        a.equal(f.lines.length, 1, th + ' finale "' + name + '": one line'); a.ok(f.y + f.h <= wrapped(th, fi[1]).y, th + ' "' + name + '": above the ask');
+      });
+      a.ok(!('size' in compileOne(th, 'brand-reveal', { title: 'Acme' }).scenes[0].text[0]), th + ': a name that fits keeps the style size');
+      var over = compileOne(th, 'finale', { title: 'Not automation or anything like that ok!' }).scenes[0].text[0];
+      a.ok(!('size' in over), th + ': past the 18-character limit nothing shrinks: it wraps as styled, for the Director to flag (copy.lines, template.prop-max)');
+    });
+  });
+
+  T.test('hardening: finale centres the name and the ask when its shot has no sun; cold-open opens in the look\'s DARK shot when it has no SPARK', function (a) {
+    var f = compileOne('cosmos', 'finale', { title: 'Acme', subtitle: 'Thanks' }, { themePatch: FLAT }).scenes[0];
+    a.deepEqual([f.text[0].y, f.text[1].y], [470, 610], 'no FINALE shot: centred like the brand reveal');
+    var d = compileOne('cosmos', 'finale', { title: 'Acme', subtitle: 'Thanks', shot: 'DRIFT' }).scenes[0];
+    a.deepEqual([d.text[0].y, d.text[1].y], [470, 610], 'a chosen shot without a sun: centred');
+    if (PD.theme.has('slate')) {
+      var sl = PD.theme.resolve('slate'), co = compileOne('slate', 'cold-open', { line: 'Hi' }).scenes[0];
+      if (sl.shots.SPARK) a.ok(true, 'slate has a SPARK shot of its own');
+      else { var want = {}; Object.keys(sl.shots.DARK).forEach(function (k) { want[k] = sl.shots.DARK[k]; }); want.spark = 1; a.deepEqual(co.world, want, 'slate: the DARK shot, with the spark'); }
+      a.deepEqual(brief(PD.validate(compileOne('slate', 'cold-open', { line: 'Hi' }))), [], 'and it validates');
+    }
+  });
+
+  T.test('hardening: the-box keeps a long escape word and its line between the cube and the frame edge (x 980 to 1780)', function (a) {
+    looks(function (th) {
+      ['Partnerships', 'Innovation', 'Outside'].forEach(function (word) {
+        var st = compileOne(th, 'the-box', { line: 'Spreadsheets were built for a world that has already gone.', escape: word, subtitle: 'is where the real growth happens' }).scenes[0].steps[0].text;
+        var e = wrapped(th, st[0]), s = wrapped(th, st[1]);
+        a.equal(e.lines.length, 1, th + ' "' + word + '": one line');
+        a.ok(e.x >= 979.5 && e.x + e.w <= 1780.5, th + ' "' + word + '" spans ' + Math.round(e.x) + '..' + Math.round(e.x + e.w));
+        a.ok(s.x >= 979.5 && s.x + s.w <= 1780.5, th + ': its line spans ' + Math.round(s.x) + '..' + Math.round(s.x + s.w));
+      });
+    });
+  });
+
+  T.test('hardening: a galaxy-reveal line at the 50-character limit wraps left of the galaxy in even lines, under the kicker', function (a) {
+    var g = compileOne('cosmos', 'galaxy-reveal', { kicker: 'Somewhere in all of this noise', line: 'there is one customer who needs exactly what we do', marker: 'Your next customer' }).scenes[0];
+    var k = wrapped('cosmos', g.text[0]), l = wrapped('cosmos', g.text[1]);
+    a.equal(l.lines.length, 2); a.ok(l.lines[1].split(' ').length >= 3, 'no stray last word (' + l.lines[1] + ')');
+    a.ok(l.x + l.w <= 1120, 'left of the galaxy core (right edge ' + Math.round(l.x + l.w) + ')'); a.ok(k.y + k.h <= l.y, 'under the kicker');
+    a.near(l.y, 468, 0.5, 'its top is where one line\'s top is');
+  });
+
+  T.test('hardening: timeline milestones without u (the Studio\'s) never print over each other, the title, a node or the frame edge, from 2 to 8', function (a) {
+    var MS = [['Spring 2018', 'Founded in a garage'], ['Autumn 2019', 'First paying customer'], ['Summer 2020', 'Remote-first for good'], ['Winter 2021', 'Series A closed today'],
+      ['Spring 2022', 'Opened London office'], ['Autumn 2023', 'One hundred employees'], ['Summer 2024', 'Launched the platform'], ['Today 2026', 'The next big chapter']];
+    looks(function (th) {
+      [2, 3, 4, 5, 6, 7, 8].forEach(function (n) {
+        var s = compileOne(th, 'timeline', { kicker: 'How we got here', title: 'Eight years of building the company', milestones: MS.slice(0, n).map(function (m) { return { when: m[0], label: m[1] }; }) }).scenes[0];
+        var boxes = s.text.concat.apply(s.text, s.steps.map(function (st) { return st.text; })).map(function (t) { return { t: t.str, r: wrapped(th, t) }; });
+        var nodes = s.steps.map(function (st) { var c = st.particles[0].points[22]; return { x: c.x - 11, y: c.y - 11, w: 22, h: 22 }; });
+        for (var i = 0; i < boxes.length; i++) {
+          var r = boxes[i].r;
+          a.ok(r.x >= 0 && r.x + r.w <= 1920 && r.y >= 0 && r.y + r.h <= 1080, th + ' ' + n + ': "' + boxes[i].t + '" is inside the frame');
+          for (var j = i + 1; j < boxes.length; j++) a.ok(!overlaps(r, boxes[j].r), th + ' ' + n + ': "' + boxes[i].t + '" and "' + boxes[j].t + '" do not overlap');
+          nodes.forEach(function (nd, k) { a.ok(!overlaps(r, nd), th + ' ' + n + ': "' + boxes[i].t + '" clears node ' + (k + 1)); });
+        }
+      });
+    });
+  });
+
+  T.test('hardening: three-points columns wrap each title inside its column and line the detail tops up; the kicker is centred; a row\'s bullet sits on its title', function (a) {
+    var FIVE = [['Answers within the hour', 'A real person replies to every message before lunch.'], ['Transparent pricing plan', 'One page, no surprises, cancel any month you like.'],
+      ['Local expert support', 'Specialists who know your market and your rules.'], ['Security by default', 'Encrypted at rest and in transit, audited every year.'],
+      ['Continuous improvement', 'New features every month, shaped by what you ask.']];
+    looks(function (th) {
+      [3, 4, 5].forEach(function (n) {
+        var c = compileOne(th, 'three-points', { kicker: 'Five things we promise', layout: 'columns', items: FIVE.slice(0, n).map(function (x) { return { title: x[0], line: x[1] }; }) }).scenes[0];
+        var titles = c.steps.map(function (st) { return wrapped(th, st.text[0]); }), details = c.steps.map(function (st) { return wrapped(th, st.text[1]); });
+        var lowest = Math.max.apply(null, titles.map(function (r) { return r.y + r.h; }));
+        titles.forEach(function (r, k) {
+          a.ok(r.w <= c.steps[k].text[0].maxWidth + 0.5, th + ' ' + n + ': title ' + (k + 1) + ' fits its column');
+          if (k) a.ok(!overlaps(titles[k - 1], r, 8), th + ' ' + n + ': titles ' + k + ' and ' + (k + 1) + ' are apart');
+          a.near(details[k].y, details[0].y, 1e-6, th + ' ' + n + ': detail ' + (k + 1) + ' starts with the others');
+          a.near(r.y, titles[0].y, 1e-6, th + ' ' + n + ': title ' + (k + 1) + ' starts with the others');
+        });
+        a.ok(details[0].y >= lowest + 20, th + ' ' + n + ': the details start under the tallest title');
+        a.deepEqual(c.text, [{ str: 'Five things we promise', style: 'kicker', x: 960, y: 150 }], 'the kicker is centred over the columns');
+      });
+    });
+    var r = compileOne('cosmos', 'three-points', { kicker: 'K', items: FIVE.slice(0, 3).map(function (x) { return { title: x[0], line: x[1] }; }) }).scenes[0];
+    r.steps.forEach(function (st) { a.equal(st.particles[0].points[0].y, st.text[0].y, 'rows: the bullet ring is centred on the title line'); });
+  });
+
+  T.test('hardening: big-number never shows a number nobody gave; the seed\'s {number} is on stage until the author types one, and the Director flags it', function (a) {
+    var seed = compileOne('cosmos', 'big-number', clone(PD.template.get('big-number').seed)).scenes[0];
+    a.ok(!('elements' in seed), 'no counter: nothing to count to'); a.deepEqual(seed.text[0], { id: 'num', str: '{number}', style: 'mega', y: 450, reveal: 'fade' });
+    a.ok(!/0%/.test(JSON.stringify(seed)), 'no 0% anywhere');
+    a.deepEqual(brief(errors(PD.validate(compileOne('cosmos', 'big-number', clone(PD.template.get('big-number').seed))))), [], 'the seed is valid props');
+    var part = compileOne('cosmos', 'big-number', { value: '{number}', label: 'L', reveal: 'particles' }).scenes[0];
+    a.deepEqual(part.text[0], { id: 'num', str: '{number}', style: 'mega', y: 450, reveal: 'particles' });
+    var none = compileOne('cosmos', 'big-number', { label: 'L' });
+    a.equal(none.scenes[0].text[0].str, '{number}', 'a missing value shows the prompt, not 0%');
+    a.ok(PD.validate(none).some(function (i) { return i.code === 'template.prop-required' && i.path === 'props.value'; }), 'and stays a required-prop error');
+    a.equal(compileOne('cosmos', 'big-number', { value: 'many', label: 'L' }).scenes[0].text[0].str, 'many', 'text typed into the number is shown as typed (validate calls it a type error)');
+    if (PD.story && typeof PD.story.lint === 'function') {
+      var l = PD.story.lint(compileOne('cosmos', 'big-number', { value: '{number}', label: 'of customers come back' }));
+      a.ok(l.findings.some(function (f) { return f.id === 'copy.placeholder' && f.vars.token === '{number}'; }), 'with the label written, the Director still asks for the number');
+    }
   });
 
   T.test('template scenes keep the compile contract: id, notes, dwell, stepNotes, overrides, beat, energy and like', function (a) {
